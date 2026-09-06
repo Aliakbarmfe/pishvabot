@@ -1,5 +1,5 @@
 {
-  "name": "telegram-mark-bot",
+  "name": "pishvabot",
   "version": "1.0.0",
   "description": "Telegram Mark Token Bot on Cloudflare Workers",
   "main": "src/index.js",
