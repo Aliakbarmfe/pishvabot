@@ -17,6 +17,9 @@ export default {
   }
 };
 
+// توکن مستقیم قرار داده شد
+const BOT_TOKEN = "8820980497:AAH7pJaEBk9gOYBAPllruazDLDLWlPW5hrI";
+
 // تنظیمات مربوط به لول‌ها و جوایز/جریمه‌ها
 const LEVEL_CONFIG = [
   { level: 1, minMark: 0, rewardMin: 50, rewardMax: 120, cooldownSec: 300, penalty: 120 },
@@ -52,10 +55,14 @@ async function handleMessage(message, env) {
 
   if (!isReward && !isPenalty) return;
 
-  // دریافت اطلاعات کاربر از KV
+  // دریافت اطلاعات کاربر از KV یا حافظه موقت
   const kvKey = `user:${userId}`;
-  const userDataRaw = await env.USER_STORE.get(kvKey);
-  let userData = userDataRaw ? JSON.parse(userDataRaw) : { marks: 0, lastRewardTime: 0 };
+  let userData = { marks: 0, lastRewardTime: 0 };
+  
+  if (env.USER_STORE) {
+    const userDataRaw = await env.USER_STORE.get(kvKey);
+    if (userDataRaw) userData = JSON.parse(userDataRaw);
+  }
 
   let currentConfig = getLevelInfo(userData.marks);
   const now = Math.floor(Date.now() / 1000);
@@ -65,7 +72,7 @@ async function handleMessage(message, env) {
     if (timePassed < currentConfig.cooldownSec) {
       const waitTime = Math.ceil((currentConfig.cooldownSec - timePassed) / 60);
       const replyMsg = `⏳ شما باید ${waitTime} دقیقه دیگر برای دریافت جایزه صبر کنید.`;
-      await sendTelegramReply(env.BOT_TOKEN, chatId, messageId, replyMsg);
+      await sendTelegramReply(chatId, messageId, replyMsg);
       return;
     }
 
@@ -73,7 +80,6 @@ async function handleMessage(message, env) {
     userData.marks += reward;
     userData.lastRewardTime = now;
 
-    // بررسی ارتقای لول بعد از افزودن جایزه
     const newConfig = getLevelInfo(userData.marks);
     let replyText = `🎉 آفرین! شما ${reward} مارک جایزه گرفتید.\n💰 کل مارک‌های شما: ${userData.marks}\n📊 لول فعلی: ${newConfig.level}`;
 
@@ -81,8 +87,10 @@ async function handleMessage(message, env) {
       replyText += `\n🚀 تبریک! لول شما به ${newConfig.level} ارتقا یافت!`;
     }
 
-    await env.USER_STORE.put(kvKey, JSON.stringify(userData));
-    await sendTelegramReply(env.BOT_TOKEN, chatId, messageId, replyText);
+    if (env.USER_STORE) {
+      await env.USER_STORE.put(kvKey, JSON.stringify(userData));
+    }
+    await sendTelegramReply(chatId, messageId, replyText);
 
   } else if (isPenalty) {
     const penaltyAmount = currentConfig.penalty;
@@ -95,13 +103,15 @@ async function handleMessage(message, env) {
       replyText += `\nافت لول! لول شما به ${newConfig.level} کاهش یافت.`;
     }
 
-    await env.USER_STORE.put(kvKey, JSON.stringify(userData));
-    await sendTelegramReply(env.BOT_TOKEN, chatId, messageId, replyText);
+    if (env.USER_STORE) {
+      await env.USER_STORE.put(kvKey, JSON.stringify(userData));
+    }
+    await sendTelegramReply(chatId, messageId, replyText);
   }
 }
 
-async function sendTelegramReply(botToken, chatId, replyToMessageId, text) {
-  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+async function sendTelegramReply(chatId, replyToMessageId, text) {
+  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
   await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
