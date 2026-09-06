@@ -1,3 +1,7 @@
 name = "pishvabot"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "USER_STORE"
+id = "b3bba30ec20d43ac81efaaf8277c3312"
