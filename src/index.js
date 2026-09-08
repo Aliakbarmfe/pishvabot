@@ -1,11 +1,9 @@
 /**
- * Pishva Telegram Bot - Powered by Cloudflare Workers & D1 Database
- * Worker Name: pishvabot
- * Database Binding: DB (pishvabot_db)
+ * Pishva Telegram Bot - Worker: pishvabot
+ * Database: pishva-db (39675e9e-1442-4444-9032-b19fd80f2ca7)
  */
 
 const ITEMS = {
-  // Weapons: { price, damage, name }
   "bat": { type: "weapon", price: 1000, val: 50, name: "چوب بیسبال 🏏" },
   "knife": { type: "weapon", price: 1200, val: 65, name: "چاقو 🔪" },
   "pistol": { type: "weapon", price: 5200, val: 100, name: "پیستول 🔫" },
@@ -14,7 +12,6 @@ const ITEMS = {
   "sniper": { type: "weapon", price: 10000, val: 300, name: "اسنایپر 🎯" },
   "rpg": { type: "weapon", price: 10000, val: 300, name: "آرپی‌جی 🚀" },
   
-  // Armor: { price, hp, name }
   "mask": { type: "armor", price: 1000, val: 0, name: "ماسک صورت 🎭" },
   "vest1": { type: "armor", price: 1000, val: 200, name: "جلیقه سطح ۱ 🛡" },
   "vest3": { type: "armor", price: 2800, val: 600, name: "جلیقه سطح ۳ 🛡" },
@@ -36,14 +33,38 @@ const BANKS = [
 
 export default {
   async fetch(request, env, ctx) {
-    if (request.method === "POST") {
-      try {
-        const update = await request.json();
-        await handleUpdate(update, env);
-      } catch (e) {
-        console.error(e);
+    if (request.method !== "POST") {
+      return new Response("Pishvabot Worker is Running!");
+    }
+
+    let update;
+    try {
+      update = await request.json();
+    } catch (e) {
+      return new Response("Invalid JSON", { status: 400 });
+    }
+
+    try {
+      await handleUpdate(update, env);
+    } catch (error) {
+      // سیستم دیباگ و گزارش خطای هوشمند
+      const chatId = update?.message?.chat?.id || update?.callback_query?.message?.chat?.id;
+      const messageId = update?.message?.message_id || update?.callback_query?.message?.message_id;
+
+      if (chatId) {
+        const errorMsg = `🚨 **ارور سیستم پیشوا!**\n\n` +
+                         `⚠️ متن خطا:\n\`\`\`\n${error.message}\n\`\`\`\n` +
+                         `📌 بخش خطا:\n\`\`\`\n${error.stack ? error.stack.substring(0, 300) : "نامشخص"}\n\`\`\``;
+
+        await sendTelegram(env, "sendMessage", {
+          chat_id: chatId,
+          text: errorMsg,
+          parse_mode: "Markdown",
+          reply_to_message_id: messageId
+        });
       }
     }
+
     return new Response("OK");
   }
 };
@@ -66,7 +87,7 @@ async function sendTelegram(env, method, body) {
 }
 
 function calculateLevel(marks) {
-  if (marks >= 10000) return 5; // لول‌های بالاتر مثل ۶ بر اساس پیشرفت مدیریت می‌شوند
+  if (marks >= 10000) return 5;
   if (marks >= 6000) return 4;
   if (marks >= 4000) return 3;
   if (marks >= 3000) return 2;
@@ -92,7 +113,7 @@ async function getUserInventoryStats(db, userId) {
   let weaponList = [];
   let armorList = [];
 
-  if (items.results) {
+  if (items && items.results) {
     for (const row of items.results) {
       const item = ITEMS[row.item_id];
       if (item) {
@@ -128,7 +149,6 @@ async function handleMessage(msg, env) {
     return sendTelegram(env, "sendMessage", payload);
   };
 
-  // چک کردن واژگان ممنوعه
   const forbiddenWords = ["های", "سلام", "هلو"];
   if (forbiddenWords.some(w => text.toLowerCase().includes(w))) {
     const penalties = { 1: 120, 2: 130, 3: 140, 4: 4000, 5: 5000, 6: 5000 };
@@ -142,7 +162,6 @@ async function handleMessage(msg, env) {
     return reply(`⚠️ **نقض قوانین سیستم نظامی!**\nشما از کلمات ضعیف استفاده کردید.\n🔻 جریمه: **${penalty}-** مارک\nموجودی فعلی: ${newMarks} مارک.`);
   }
 
-  // سیستم درود
   if (text === "درود") {
     const cooldowns = { 1: 30, 2: 30, 3: 60, 4: 150, 5: 120, 6: 120 };
     const now = Math.floor(Date.now() / 1000);
@@ -173,7 +192,6 @@ async function handleMessage(msg, env) {
     return reply(`🎖 **درود دریافت شد سرباز!**\nپاداش اراده شما: **${reward}+** مارک.\nموجودی فعلی: ${newMarks} مارک.`);
   }
 
-  // بازار سیاه
   if (text === "بازار سیاه") {
     const markup = {
       inline_keyboard: [
@@ -184,8 +202,7 @@ async function handleMessage(msg, env) {
     return reply("💣 **به بازار سیاه خوش آمدی سرباز.**\nمستقیماً انتخاب کن چه تجهیزاتی برای نبرد نیاز داری:", markup);
   }
 
-  // راهنما
-  if (text === "راهنما") {
+  if (text === "راهنما" || text === "/start") {
     const helpTxt = `🪖 **پروتکل راهنمای مقر فرماندهی (پیشوا)**
 
 🔹 **کسب درآمد:**
@@ -210,7 +227,6 @@ async function handleMessage(msg, env) {
     return reply(helpTxt);
   }
 
-  // آمار
   if (text === "امار" || text === "آمار" || text === "امارش") {
     let targetUser = user;
     if (msg.reply_to_message) {
@@ -226,7 +242,6 @@ async function handleMessage(msg, env) {
     return sendUserStats(env, chatId, messageId, db, targetUser);
   }
 
-  // دزدی از بانک
   if (text === "دزدی از بانک") {
     const now = Math.floor(Date.now() / 1000);
     if (now - user.last_bank_rob < 3600) {
@@ -253,7 +268,6 @@ async function handleMessage(msg, env) {
     );
   }
 
-  // دزدی از سرباز
   if (text === "دزدی از سرباز") {
     const now = Math.floor(Date.now() / 1000);
     if (now - user.last_soldier_rob < 600) {
@@ -273,7 +287,6 @@ async function handleMessage(msg, env) {
     return reply("🪖 **شناسایی هدف:**\nآیا برای درگیر شدن و دزدی از نزدیک‌ترین سرباز آماده‌ای؟", confirmMarkup);
   }
 
-  // سیستم انتقال توکن
   if (text.startsWith("انتقال ")) {
     const parts = text.split(" ");
     const amount = parseInt(parts[1]);
@@ -301,7 +314,6 @@ async function handleMessage(msg, env) {
       return reply("❌ نمی‌توانی به خودت مارک انتقال دهی!");
     }
 
-    // تاییدیه انتقال
     await db.prepare("UPDATE users SET pending_action = ? WHERE user_id = ?")
       .bind(`transfer:${targetUser.user_id}:${amount}`, user.user_id).run();
 
@@ -322,7 +334,7 @@ async function handleCallback(cb, env) {
   const db = env.DB;
   const userId = cb.from.id;
   const data = cb.data;
-  const messageId = cb.message.message.message_id;
+  const messageId = cb.message.message_id;
   const chatId = cb.message.chat.id;
 
   const answer = (txt) => sendTelegram(env, "answerCallbackQuery", { callback_query_id: cb.id, text: txt, show_alert: true });
@@ -344,7 +356,6 @@ async function handleCallback(cb, env) {
     return editMsg("❌ عملیات با موفقیت لغو شد.");
   }
 
-  // منوهای بازار سیاه
   if (data === "shop_weapons") {
     const markup = {
       inline_keyboard: [
@@ -386,7 +397,6 @@ async function handleCallback(cb, env) {
     return editMsg("💣 **بازار سیاه:**", markup);
   }
 
-  // خرید آیتم‌ها
   if (data.startsWith("buy_")) {
     const itemId = data.replace("buy_", "");
     const item = ITEMS[itemId];
@@ -396,7 +406,6 @@ async function handleCallback(cb, env) {
       return answer(`❌ مارک کافی نداری! نیاز به ${item.price} مارک داری.`);
     }
 
-    // اضافه به اینونتوری
     const newMarks = user.marks - item.price;
     const newLevel = calculateLevel(newMarks);
 
@@ -407,7 +416,6 @@ async function handleCallback(cb, env) {
     return editMsg(`✅ **خرید با موفقیت انجام شد!**\nشما آیتم **${item.name}** را با قیمت **${item.price}** مارک خریداری کردید.`);
   }
 
-  // اجرای دزدی از بانک
   if (data === "confirm_bank_rob") {
     const now = Math.floor(Date.now() / 1000);
     const stats = await getUserInventoryStats(db, userId);
@@ -424,7 +432,7 @@ async function handleCallback(cb, env) {
       success = true;
       reward = Math.floor(bank.val * bank.winRatio);
     } else {
-      reward = Math.floor(bank.val * 0.2); // سود جزئی یا خسارت
+      reward = Math.floor(bank.val * 0.2);
     }
 
     const newMarks = user.marks + reward;
@@ -440,10 +448,8 @@ async function handleCallback(cb, env) {
     }
   }
 
-  // اجرای دزدی از سرباز
   if (data === "confirm_soldier_rob") {
     const now = Math.floor(Date.now() / 1000);
-    // یافتن یک سرباز تصادفی دیگر
     const opponent = await db.prepare("SELECT * FROM users WHERE user_id != ? ORDER BY RANDOM() LIMIT 1").bind(userId).first();
 
     if (!opponent) {
@@ -470,15 +476,12 @@ async function handleCallback(cb, env) {
       resultTxt = `💥 **عقب‌نشینی!**\nسرباز **${opponent.first_name}** قدرتمندتر بود و شما شکست خوردید.\nسود ناچیزی به دست آمد: **${myReward}+** مارک.`;
     }
 
-    // به‌روزرسانی مهاجم
     await db.prepare("UPDATE users SET marks = marks + ?, last_soldier_rob = ?, soldier_rob_count = soldier_rob_count + 1 WHERE user_id = ?")
       .bind(myReward, now, userId).run();
 
-    // به‌روزرسانی مدافع
     await db.prepare("UPDATE users SET marks = marks + ? WHERE user_id = ?")
       .bind(oppReward, opponent.user_id).run();
 
-    // ارسال پیام خصوصی به مدافع
     sendTelegram(env, "sendMessage", {
       chat_id: opponent.user_id,
       text: `🚨 **هشدار حمله!**\nسرباز **${user.first_name}** به شما حمله کرد.\nنتیجه نبرد: غنیمت دریافتی شما: ${oppReward} مارک.`
@@ -487,7 +490,6 @@ async function handleCallback(cb, env) {
     return editMsg(resultTxt);
   }
 
-  // تایید انتقال
   if (data === "confirm_transfer") {
     if (!user.pending_action || !user.pending_action.startsWith("transfer:")) {
       return answer("هیچ درخواستی یافت نشد.");
@@ -503,11 +505,9 @@ async function handleCallback(cb, env) {
 
     const targetUser = await db.prepare("SELECT * FROM users WHERE user_id = ?").bind(targetId).first();
 
-    // کسر از فرستنده و اضافه به گیرنده
     await db.prepare("UPDATE users SET marks = marks - ?, pending_action = NULL WHERE user_id = ?").bind(amount, userId).run();
     await db.prepare("UPDATE users SET marks = marks + ? WHERE user_id = ?").bind(amount, targetId).run();
 
-    // پیام به گیرنده
     sendTelegram(env, "sendMessage", {
       chat_id: targetId,
       text: `💸 **دریافت مارک!**\nمبلغ **${amount}** مارک از طرف **${user.first_name}** به حساب شما واریز شد.`
