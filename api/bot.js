@@ -391,4 +391,13 @@ bot.on("callback_query:data", async (ctx) => {
   }
 });
 
-module.exports = webhookCallback(bot, "http");
+module.exports = async (req, res) => {
+  try {
+    const handleUpdate = webhookCallback(bot, "http");
+    await handleUpdate(req, res);
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("Error");
+  }
+};
+
