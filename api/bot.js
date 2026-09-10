@@ -1,7 +1,7 @@
 const { Bot, inlineKeyboard, webhookCallback } = require("grammy");
 const { createClient } = require("@supabase/supabase-js");
 
-// تنظیمات سخت‌افزاری و کلیدها
+// تنظیمات کلیدها
 const BOT_TOKEN = "8820980497:AAH7pJaEBk9gOYBAPllruazDLDLWlPW5hrI";
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inppb2RtZWt5ZXFxaGdnd2pibHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTA2MTM5MiwiZXhwIjoyMTA0NjM3MzkyfQ.EcDkLO0H8x5hyXRI3X6P0vvu4ihIuQnoDOOPRxjP3pg";
@@ -9,11 +9,8 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const bot = new Bot(BOT_TOKEN);
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// مدیریت خطاهای ناخواسته برای جلوگیری از کرش سرور
 bot.catch((err) => {
-  const ctx = err.ctx;
-  console.error(`[CRITICAL ERROR] Error while handling update ${ctx.update.update_id}:`);
-  console.error(err.error);
+  console.error(`[ERROR] ${err.ctx.update.update_id}:`, err.error);
 });
 
 // داده‌های بازار سیاه
@@ -36,17 +33,12 @@ const ARMORS = {
   police: { name: "لباس جعلی پلیس 👮‍♂️", price: 8000, hp: 2500 }
 };
 
-// دریافت یا ایجاد کاربر در Supabase
 async function getUser(ctx) {
   const u = ctx.from;
   if (!u) return null;
 
   try {
-    let { data: user, error } = await supabase.from("users").select("*").eq("user_id", u.id).maybeSingle();
-    
-    if (error) {
-      console.error("[SUPABASE ERROR - getUser select]:", error);
-    }
+    let { data: user } = await supabase.from("users").select("*").eq("user_id", u.id).maybeSingle();
 
     if (!user) {
       const newUser = { 
@@ -59,24 +51,19 @@ async function getUser(ctx) {
         attack_count: 0
       };
       
-      const { data: insertedUser, error: insertErr } = await supabase.from("users").insert([newUser]).select().single();
-      if (insertErr) console.error("[SUPABASE ERROR - user insert]:", insertErr);
-      
-      const { error: invErr } = await supabase.from("inventory").insert([{ user_id: u.id, weapons: [], armors: [] }]);
-      if (invErr) console.error("[SUPABASE ERROR - inventory insert]:", invErr);
-
+      const { data: insertedUser } = await supabase.from("users").insert([newUser]).select().single();
+      await supabase.from("inventory").insert([{ user_id: u.id, weapons: [], armors: [] }]);
       user = insertedUser || newUser;
     } else if (u.username && user.username !== u.username) {
       await supabase.from("users").update({ username: u.username }).eq("user_id", u.id);
     }
     return user;
   } catch (e) {
-    console.error("[EXCEPTION in getUser]:", e);
+    console.error("getUser error:", e);
     return { user_id: u.id, username: u.username || "", first_name: u.first_name || "سرباز", marks: 0, dorood_count: 0, punish_count: 0, attack_count: 0 };
   }
 }
 
-// محاسبه سطح (Level)
 function getLevel(marks) {
   const m = marks || 0;
   if (m >= 20000) return 6;
@@ -87,7 +74,6 @@ function getLevel(marks) {
   return 1;
 }
 
-// لحن و عنوان نظامی
 function getTitleAndTone(level, name) {
   const safeName = name || "سرباز";
   if (level <= 3) return { title: `عنصر بی‌ارزش (${safeName}) 🗑`, prefix: "آهای آشغال! " };
@@ -95,12 +81,9 @@ function getTitleAndTone(level, name) {
   return { title: `فرمانده کبیر (${safeName}) 👑⚡️`, prefix: "قربان! با احترام کامل، " };
 }
 
-// محاسبه قدرت و خون
 async function getStats(userId) {
   try {
-    const { data: inv, error } = await supabase.from("inventory").select("*").eq("user_id", userId).maybeSingle();
-    if (error) console.error("[SUPABASE ERROR - getStats]:", error);
-    
+    const { data: inv } = await supabase.from("inventory").select("*").eq("user_id", userId).maybeSingle();
     let power = 0, hp = 100;
     if (inv) {
       (inv.weapons || []).forEach(w => power += (WEAPONS[w]?.power || 0));
@@ -108,26 +91,23 @@ async function getStats(userId) {
     }
     return { power, hp, inv };
   } catch (e) {
-    console.error("[EXCEPTION in getStats]:", e);
     return { power: 0, hp: 100, inv: null };
   }
 }
 
-// --- پردازش پیام‌های متنی ---
-
+// پردازش پیام‌های متنی
 bot.on("message:text", async (ctx) => {
   try {
-    const text = ctx.message.text.trim();
-    const lowerText = text.toLowerCase();
+    const rawText = ctx.message.text.trim();
+    const cleanText = rawText.replace(/\s+/g, " ").toLowerCase();
     const user = await getUser(ctx);
-    
     if (!user) return;
 
     const lvl = getLevel(user.marks);
     const tone = getTitleAndTone(lvl, user.first_name);
 
-    // ۱. کلمات ممنوعه
-    if (["سلام", "های", "هلو"].some(w => lowerText.includes(w))) {
+    // ۱. جریمه کلمات ممنوعه
+    if (["سلام", "های", "هلو"].some(w => cleanText.includes(w))) {
       const penaltyMap = { 1: 120, 2: 130, 3: 140, 4: 4000, 5: 5000, 6: 5000 };
       const penalty = penaltyMap[lvl] || 120;
       
@@ -140,7 +120,7 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۲. سیستم درود
-    if (lowerText === "درود") {
+    if (cleanText === "درود") {
       const now = new Date();
       const cooldowns = { 1: 30, 2: 30, 3: 60, 4: 150, 5: 120, 6: 120 };
       const rewards = {
@@ -170,15 +150,15 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۳. آمار
-    if (lowerText.startsWith("امار") || lowerText.startsWith("آمار") || lowerText === "امارش") {
+    if (cleanText.startsWith("امار") || cleanText.startsWith("آمار") || cleanText === "امارش") {
       let targetUser = user;
 
       if (ctx.message.reply_to_message && ctx.message.reply_to_message.from) {
         const targetId = ctx.message.reply_to_message.from.id;
         const { data } = await supabase.from("users").select("*").eq("user_id", targetId).maybeSingle();
         if (data) targetUser = data;
-      } else if (text.includes("@")) {
-        const uname = text.split("@")[1].trim();
+      } else if (rawText.includes("@")) {
+        const uname = rawText.split("@")[1].trim();
         const { data } = await supabase.from("users").select("*").eq("username", uname).maybeSingle();
         if (data) targetUser = data;
       }
@@ -201,7 +181,7 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۴. بازار سیاه
-    if (text === "بازار سیاه") {
+    if (cleanText.includes("بازار سیاه") || cleanText.includes("بازارسیاه")) {
       const kb = inlineKeyboard()
         .text("🪓 چوب بیسبال (1000)", "buy_weapon_bat")
         .text("🔪 چاقو (1200)", "buy_weapon_knife").row()
@@ -224,7 +204,7 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۵. دزدی از بانک
-    if (text === "دزدی از بانک") {
+    if (cleanText.includes("دزدی از بانک")) {
       const { power, hp } = await getStats(user.user_id);
       const kb = inlineKeyboard()
         .text("💥 تایید حمله به بانک", "confirm_rob_bank")
@@ -237,7 +217,7 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۶. دزدی از سرباز
-    if (text === "دزدی از سرباز") {
+    if (cleanText.includes("دزدی از سرباز")) {
       const kb = inlineKeyboard()
         .text("⚔️ تایید حمله به نزدیک‌ترین سرباز", "confirm_rob_user")
         .text("❌ انصراف", "cancel_action");
@@ -249,8 +229,8 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۷. انتقال توکن
-    if (text.startsWith("انتقال")) {
-      const parts = text.split(" ");
+    if (cleanText.startsWith("انتقال")) {
+      const parts = rawText.split(" ");
       const amount = parseInt(parts[1]);
 
       if (isNaN(amount) || amount <= 0) {
@@ -285,7 +265,7 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۸. راهنما
-    if (text === "راهنما") {
+    if (cleanText === "راهنما") {
       const help = `📜 **راهنمای عملیاتی ربات سیگما:**\n\n` +
         `🫡 **درود**: دریافت پاداش روزانه/دوره‌ای مارک\n` +
         `🖤 **بازار سیاه**: خرید سلاح و زره دفاعی\n` +
@@ -298,12 +278,11 @@ bot.on("message:text", async (ctx) => {
       return ctx.reply(help, { reply_to_message_id: ctx.message.message_id, parse_mode: "Markdown" });
     }
   } catch (e) {
-    console.error("[ERROR in message handler]:", e);
+    console.error("Text Handler Error:", e);
   }
 });
 
-// --- کلیک روی دکمه‌های شیشه‌ای ---
-
+// پردازش دکمه‌ها
 bot.on("callback_query:data", async (ctx) => {
   try {
     const data = ctx.callbackQuery.data;
@@ -315,13 +294,14 @@ bot.on("callback_query:data", async (ctx) => {
       return ctx.editMessageText("عملیات توسط کاربر لغو گردید. 🛑");
     }
 
-    // خرید از بازار سیاه
     if (data.startsWith("buy_")) {
-      const [_, type, itemKey] = data.split("_");
+      const parts = data.split("_");
+      const type = parts[1];
+      const itemKey = parts[2];
       const item = type === "weapon" ? WEAPONS[itemKey] : ARMORS[itemKey];
 
       if ((user.marks || 0) < item.price) {
-        return ctx.answerCallbackQuery({ text: "موجودی مارک شما برای این خرید کافی نیست! ❌", show_alert: true });
+        return ctx.answerCallbackQuery({ text: "موجودی مارک شما کافی نیست! ❌", show_alert: true });
       }
 
       await supabase.from("users").update({ marks: user.marks - item.price }).eq("user_id", user.user_id);
@@ -337,15 +317,14 @@ bot.on("callback_query:data", async (ctx) => {
         await supabase.from("inventory").upsert({ user_id: user.user_id, weapons: currentInv.weapons || [], armors: newA });
       }
 
-      await ctx.answerCallbackQuery({ text: `خرید با موفقیت انجام شد: ${item.name}`, show_alert: true });
-      return ctx.editMessageText(`تجهیزات [ ${item.name} ] با موفقیت خریداری و به انبار اضافه شد. ⚔️`);
+      await ctx.answerCallbackQuery({ text: `خرید انجام شد: ${item.name}`, show_alert: true });
+      return ctx.editMessageText(`تجهیزات [ ${item.name} ] خریداری شد و به انبار اضافه گردید. ⚔️`);
     }
 
-    // تایید انتقال
     if (data.startsWith("confirm_transfer_")) {
-      const [_, __, targetIdStr, amountStr] = data.split("_");
-      const targetId = parseInt(targetIdStr);
-      const amount = parseInt(amountStr);
+      const parts = data.split("_");
+      const targetId = parseInt(parts[2]);
+      const amount = parseInt(parts[3]);
 
       if ((user.marks || 0) < amount) {
         return ctx.answerCallbackQuery({ text: "موجودی کافی نیست!", show_alert: true });
@@ -362,11 +341,10 @@ bot.on("callback_query:data", async (ctx) => {
         await bot.api.sendMessage(targetId, `🎁 شما مبلغ ${amount} مارک از طرف ${user.first_name} دریافت کردید.`);
       } catch (e) {}
 
-      await ctx.answerCallbackQuery("انتقال با موفقیت انجام شد.");
+      await ctx.answerCallbackQuery("انتقال انجام شد.");
       return ctx.editMessageText(`تراکنش تایید شد: ${amount} مارک به ${target.first_name} منتقل گردید. 🟢`);
     }
 
-    // دزدی از بانک
     if (data === "confirm_rob_bank") {
       const now = new Date();
       if (user.last_bank_rob_at && (now - new Date(user.last_bank_rob_at)) / 1000 < 3600) {
@@ -396,7 +374,6 @@ bot.on("callback_query:data", async (ctx) => {
       return ctx.editMessageText(`💣 **نتیجه عملیات حمله به بانک (${bankVal} مارکی):**\n\nتیم شما موفق شد غنیمتی معادل ${profit} مارک استخراج کند! 💰`);
     }
 
-    // دزدی از سرباز
     if (data === "confirm_rob_user") {
       const now = new Date();
       if (user.last_user_rob_at && (now - new Date(user.last_user_rob_at)) / 1000 < 600) {
@@ -438,11 +415,11 @@ bot.on("callback_query:data", async (ctx) => {
       return ctx.editMessageText(msg);
     }
   } catch (e) {
-    console.error("[ERROR in callback handler]:", e);
+    console.error("Callback Handler Error:", e);
   }
 });
 
-// صادر کردن هندلر ورسل
+// خروجی ورسل
 module.exports = async (req, res) => {
   try {
     if (req.method === "POST") {
@@ -452,7 +429,7 @@ module.exports = async (req, res) => {
       res.status(200).send("Sigma Telegram Bot Server is Live!");
     }
   } catch (err) {
-    console.error("[SERVERLESS HANDLER ERROR]:", err);
+    console.error("Serverless Handler Error:", err);
     res.status(500).send("Internal Error");
   }
 };
