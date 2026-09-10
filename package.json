@@ -1,7 +1,9 @@
 {
-  "name": "pishvabot",
+  "name": "sigma-telegram-bot",
   "version": "1.0.0",
-  "description": "Pishva Telegram Game Bot on Cloudflare Workers",
-  "main": "src/index.js",
-  "dependencies": {}
+  "main": "api/bot.js",
+  "dependencies": {
+    "grammy": "^1.30.0",
+    "@supabase/supabase-js": "^2.45.0"
+  }
 }
