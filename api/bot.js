@@ -1,4 +1,4 @@
-const { Bot, inlineKeyboard, webhookCallback } = require("grammy");
+const { Bot, InlineKeyboard, webhookCallback } = require("grammy");
 const { createClient } = require("@supabase/supabase-js");
 
 // تنظیمات کلیدها
@@ -99,7 +99,31 @@ async function getStats(userId) {
 bot.on("message:text", async (ctx) => {
   try {
     const rawText = ctx.message.text.trim();
-    const cleanText = rawText.replace(/\s+/g, " ").toLowerCase();
+    const cleanText = rawText.replace(/\s+/g, "").toLowerCase();
+
+    // ۴. بازار سیاه (پردازش سریع بدون انتظار دیتابیس)
+    if (cleanText.includes("بازارسیاه")) {
+      const kb = new InlineKeyboard()
+        .text("🪓 چوب بیسبال (1000)", "buy_weapon_bat")
+        .text("🔪 چاقو (1200)", "buy_weapon_knife").row()
+        .text("🔫 پیستول (5200)", "buy_weapon_pistol")
+        .text("💣 نارنجک (6000)", "buy_weapon_grenade").row()
+        .text("💥 شاتگان (7000)", "buy_weapon_shotgun")
+        .text("🎯 اسنایپر (10000)", "buy_weapon_sniper").row()
+        .text("🚀 آر پی جی (10000)", "buy_weapon_rpg").row()
+        .text("🎭 ماسک (1000)", "buy_armor_mask")
+        .text("🛡 جلیقه لول ۱ (1000)", "buy_armor_vest1").row()
+        .text("🛡 جلیقه لول ۳ (2800)", "buy_armor_vest3")
+        .text("🛡 جلیقه لول ۵ (3999)", "buy_armor_vest5").row()
+        .text("🦵 زانوبند (2000)", "buy_armor_knee")
+        .text("👮‍♂️ لباس پلیس (8000)", "buy_armor_police");
+
+      return ctx.reply(`وارد مقر کاپو (بازار سیاه) شدید. تجهیزات خود را انتخاب کنید: 🖤🕶`, {
+        reply_to_message_id: ctx.message.message_id,
+        reply_markup: kb
+      });
+    }
+
     const user = await getUser(ctx);
     if (!user) return;
 
@@ -107,7 +131,7 @@ bot.on("message:text", async (ctx) => {
     const tone = getTitleAndTone(lvl, user.first_name);
 
     // ۱. جریمه کلمات ممنوعه
-    if (["سلام", "های", "هلو"].some(w => cleanText.includes(w))) {
+    if (["سلام", "های", "هلو"].some(w => rawText.toLowerCase().includes(w))) {
       const penaltyMap = { 1: 120, 2: 130, 3: 140, 4: 4000, 5: 5000, 6: 5000 };
       const penalty = penaltyMap[lvl] || 120;
       
@@ -180,33 +204,10 @@ bot.on("message:text", async (ctx) => {
       return ctx.reply(msg, { reply_to_message_id: ctx.message.message_id, parse_mode: "Markdown" });
     }
 
-    // ۴. بازار سیاه
-    if (cleanText.includes("بازار سیاه") || cleanText.includes("بازارسیاه")) {
-      const kb = inlineKeyboard()
-        .text("🪓 چوب بیسبال (1000)", "buy_weapon_bat")
-        .text("🔪 چاقو (1200)", "buy_weapon_knife").row()
-        .text("🔫 پیستول (5200)", "buy_weapon_pistol")
-        .text("💣 نارنجک (6000)", "buy_weapon_grenade").row()
-        .text("💥 شاتگان (7000)", "buy_weapon_shotgun")
-        .text("🎯 اسنایپر (10000)", "buy_weapon_sniper").row()
-        .text("🚀 آر پی جی (10000)", "buy_weapon_rpg").row()
-        .text("🎭 ماسک (1000)", "buy_armor_mask")
-        .text("🛡 جلیقه لول ۱ (1000)", "buy_armor_vest1").row()
-        .text("🛡 جلیقه لول ۳ (2800)", "buy_armor_vest3")
-        .text("🛡 جلیقه لول ۵ (3999)", "buy_armor_vest5").row()
-        .text("🦵 زانوبند (2000)", "buy_armor_knee")
-        .text("👮‍♂️ لباس پلیس (8000)", "buy_armor_police");
-
-      return ctx.reply(`${tone.prefix}وارد مقر کاپو (بازار سیاه) شدید. تجهیزات خود را انتخاب کنید: 🖤🕶`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb
-      });
-    }
-
     // ۵. دزدی از بانک
-    if (cleanText.includes("دزدی از بانک")) {
+    if (cleanText.includes("دزدیازبانک")) {
       const { power, hp } = await getStats(user.user_id);
-      const kb = inlineKeyboard()
+      const kb = new InlineKeyboard()
         .text("💥 تایید حمله به بانک", "confirm_rob_bank")
         .text("❌ انصراف", "cancel_action");
 
@@ -217,8 +218,8 @@ bot.on("message:text", async (ctx) => {
     }
 
     // ۶. دزدی از سرباز
-    if (cleanText.includes("دزدی از سرباز")) {
-      const kb = inlineKeyboard()
+    if (cleanText.includes("دزدیازسرباز")) {
+      const kb = new InlineKeyboard()
         .text("⚔️ تایید حمله به نزدیک‌ترین سرباز", "confirm_rob_user")
         .text("❌ انصراف", "cancel_action");
 
@@ -254,7 +255,7 @@ bot.on("message:text", async (ctx) => {
         return ctx.reply(`${tone.prefix}خزانه شما خالی است! موجودی کافی نیست. ❌`, { reply_to_message_id: ctx.message.message_id });
       }
 
-      const kb = inlineKeyboard()
+      const kb = new InlineKeyboard()
         .text("✅ تایید و انتقال", `confirm_transfer_${targetId}_${amount}`)
         .text("❌ انصراف", "cancel_action");
 
