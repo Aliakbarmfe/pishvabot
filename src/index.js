@@ -1,6 +1,6 @@
 /**
  * PishvaBot - Telegram Bot Engine on Cloudflare Workers & Supabase
- * Clean Fixed Version with Group-Only Restriction & New UI Features
+ * Clean Fixed Version with Group-Only Restriction & Persistent PV Keyboard
  */
 
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
@@ -109,6 +109,17 @@ function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// کیبورد همیشگی پیوی
+function getPvKeyboard() {
+    return {
+        keyboard: [
+            [{ text: '🔑 رمز سایت' }, { text: '📖 راهنما' }],
+            [{ text: '🌐 لینک سایت' }]
+        ],
+        resize_keyboard: true
+    };
+}
+
 // ------------------- TELEGRAM API WRAPPER -------------------
 async function sendTg(token, method, payload) {
     const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -150,58 +161,74 @@ async function handleMessage(token, msg) {
     const replyMsgId = msg.message_id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
 
-    // 0. تغییر رمز عبور متنی (در صورت درخواست قبلی)
-    if (user.awaiting_pass_change) {
-        if (text.length < 4) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>رمز عبور باید حداقل ۴ کاراکتر باشد!</b> دوباره تلاش کنید:', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+    // --- مدیریت پیوی (PV) ---
+    if (!isGroup) {
+        // تغییر رمز عبور متنی (در صورت درخواست قبلی)
+        if (user.awaiting_pass_change) {
+            if (text.length < 4) {
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>رمز عبور باید حداقل ۴ کاراکتر باشد!</b> دوباره تلاش کنید:', reply_to_message_id: replyMsgId, parse_mode: 'HTML', reply_markup: getPvKeyboard() });
+            }
+            await dbFetch(`users?user_id=eq.${user.user_id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ site_password: text, awaiting_pass_change: false })
+            });
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `✅ <b>رمز عبور جدید شما با موفقیت ثبت شد!</b>\n🔐 رمز عبور جدید: <code>${text}</code>`,
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML',
+                reply_markup: getPvKeyboard()
+            });
         }
-        await dbFetch(`users?user_id=eq.${user.user_id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ site_password: text, awaiting_pass_change: false })
-        });
-        return sendTg(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `✅ <b>رمز عبور جدید شما با موفقیت ثبت شد!</b>\n🔐 رمز عبور جدید: <code>${text}</code>`,
-            reply_to_message_id: replyMsgId,
-            parse_mode: 'HTML'
-        });
-    }
 
-    // 1. دستور /start
-    if (text === '/start') {
-        const welcomeText = `👑 <b>به بات رسمی پیشوا بزرگ خوش آمدید!</b> 👑\n\n` +
-            `⚔️ <i>مقر فرماندهی نیروهای رایش بزرگ</i>\n\n` +
-            `⚠️ <b>توجه:</b> تمام عملیات‌ها، بازی‌ها و نبردها <b>فقط و فقط داخل گروه</b> امکان‌پذیر است.\n\n` +
-            `👇 جهت دسترسی سریع از دکمه‌های زیر استفاده کنید:`;
+        // دستور /start در پیوی
+        if (text === '/start') {
+            const welcomeText = `👑 <b>به بات رسمی پیشوا بزرگ خوش آمدید!</b> 👑\n\n` +
+                `⚔️ <i>مقر فرماندهی نیروهای رایش بزرگ</i>\n\n` +
+                `⚠️ <b>توجه:</b> تمام عملیات‌ها، بازی‌ها و نبردها <b>فقط و فقط داخل گروه</b> امکان‌پذیر است.\n\n` +
+                `👇 از دکمه‌های زیر جهت دسترسی سریع استفاده کنید:`;
 
-        const keyboard = {
-            inline_keyboard: [
-                [
-                    { text: '🌐 ورود به سایت رایش بزرگ', url: 'https://Pishwabot.vercel.app' }
-                ],
-                [
-                    { text: '🔑 رمز سایت', callback_data: 'site_password_menu' },
-                    { text: '📖 راهنما', callback_data: 'help_menu' }
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: welcomeText, reply_markup: getPvKeyboard(), parse_mode: 'HTML' });
+        }
+
+        // دکمه‌های همیشگی پیوی
+        if (text === '📖 راهنما') {
+            return sendHelpMessage(token, chatId, replyMsgId, getPvKeyboard());
+        }
+
+        if (text === '🔑 رمز سایت') {
+            const passText = `🔑 <b>مدیریت رمز عبور سایت:</b>\n\n` +
+                `🔐 <b>رمز عبور فعلی شما:</b> <code>${user.site_password || '123456'}</code>`;
+            
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '🔄 ثبت رمز جدید', callback_data: 'prompt_new_password' }]
                 ]
-            ]
-        };
+            };
 
-        return sendTg(token, 'sendMessage', { chat_id: chatId, text: welcomeText, reply_markup: keyboard, parse_mode: 'HTML' });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: passText, reply_markup: keyboard, parse_mode: 'HTML' });
+        }
+
+        if (text === '🌐 لینک سایت') {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `🌐 <b>ورود به سایت رایش بزرگ:</b>\nhttps://Pishwabot.vercel.app`,
+                reply_markup: getPvKeyboard(),
+                parse_mode: 'HTML'
+            });
+        }
+
+        // اگر در پیوی پیامی مرتبط با بازی داده شود یا هر پیام دیگری غیر از موارد بالا باشد، بات کلا سکوت می‌کند (جواب نمی‌دهد)
+        return;
     }
 
-    // راهنمای متنی در صورت تایپ "راهنما"
+    // --- مدیریت گروه ---
+    // start در گروه نباید کار کند
+    if (text === '/start') return;
+
+    // راهنمای متنی در صورت تایپ "راهنما" در گروه
     if (text === 'راهنما') {
         return sendHelpMessage(token, chatId, replyMsgId);
-    }
-
-    // --- محدودیت اجرای بازی فقط در گروه ---
-    if (!isGroup) {
-        return sendTg(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `🚫 <b>دسترسی غیرمجاز!</b>\n\nسرباز! بازی و تمام دستورات نظامی فقط در <b>گروه</b> قابل اجرا هستند.`,
-            reply_to_message_id: replyMsgId,
-            parse_mode: 'HTML'
-        });
     }
 
     // 2. مجازات برای کلمات ممنوعه
@@ -621,7 +648,7 @@ async function handleMessage(token, msg) {
 }
 
 // تابع راهنمای کامل
-function sendHelpMessage(token, chatId, replyMsgId) {
+function sendHelpMessage(token, chatId, replyMsgId, replyMarkup = null) {
     const helpText = `⚔️ 🔥 <b>پایگاه اطلاعاتی پیشوا بات</b> 🔥 ⚔️\n` +
         `✨ ────────────────── ✨\n\n` +
         `🚨 <b>مهم: بازی فقط درون گروه فعال می‌باشد!</b>\n\n` +
@@ -636,7 +663,12 @@ function sendHelpMessage(token, chatId, replyMsgId) {
         `🦅 <b>تفنگ شکاری</b> ➔ ارتقای سلاح شکاری برای صید موجودات بهتر\n` +
         `🎯 <b>شکار / قفس</b> ➔ شکار موجودات و فروش صیدها در بازار\n\n` +
         `🚨 <b>هشدار:</b> کلمات احوالپرسی غیرنظامی جریمه سنگین دارند! 🧨`;
-    return sendTg(token, 'sendMessage', { chat_id: chatId, text: helpText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+
+    const payload = { chat_id: chatId, text: helpText, parse_mode: 'HTML' };
+    if (replyMsgId) payload.reply_to_message_id = replyMsgId;
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+
+    return sendTg(token, 'sendMessage', payload);
 }
 
 // ------------------- CALLBACK QUERY HANDLER -------------------
@@ -649,27 +681,7 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '✖️ <b>عملیات با دستور رزمنده لغو شد.</b>', parse_mode: 'HTML' });
     }
 
-    // دکمه راهنما
-    if (data === 'help_menu') {
-        return sendHelpMessage(token, chatId, cb.message.message_id);
-    }
-
-    // منوی رمز سایت
-    if (data === 'site_password_menu') {
-        const passText = `🔑 <b>مدیریت رمز عبور سایت:</b>\n\n` +
-            `🔐 <b>رمز عبور فعلی شما:</b> <code>${user.site_password || '123456'}</code>`;
-        
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '🔄 ثبت رمز جدید', callback_data: 'prompt_new_password' }],
-                [{ text: '🔙 بازگشت', callback_data: 'cancel' }]
-            ]
-        };
-
-        return sendTg(token, 'sendMessage', { chat_id: chatId, text: passText, reply_markup: keyboard, parse_mode: 'HTML' });
-    }
-
-    // درخواست تغییر رمز
+    // درخواست تغییر رمز از طریق اینلاین در پیوی
     if (data === 'prompt_new_password') {
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
@@ -716,10 +728,10 @@ async function handleCallback(token, cb) {
         await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - amount }) });
         await dbFetch(`users?user_id=eq.${targetId}`, { method: 'PATCH', body: JSON.stringify({ marks: target[0].marks + amount }) });
 
-        // اعلان عمومی به گروه در صورت انتقال
+        // اعلان به پیوی دریافت‌کننده
         sendTg(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `📢 💸 <b>اعلان انتقال مارک!</b>\nکاربر <b>${user.first_name}</b> مقدار <b>${amount}</b> مارک ${MARK_ANIM} به حساب <b>${target[0].first_name}</b> واریز کرد. 🚀`,
+            chat_id: target[0].user_id,
+            text: `📢 💸 <b>اعلان دریافت مارک!</b>\nکاربر <b>${user.first_name}</b> مقدار <b>${amount}</b> مارک ${MARK_ANIM} به حساب شما واریز کرد. 🚀`,
             parse_mode: 'HTML'
         });
 
@@ -826,13 +838,12 @@ async function handleCallback(token, cb) {
             })
         });
 
-        // گزارش دزدی به گروه
+        // ارسال گزارش دزدی به پیوی کاربر
         const heistReport = `💥 💣 <b>گزارش سرقت مسلحانه از بانک!</b> 💣 💥\n\n` +
-            `👤 <b>سارق:</b> ${user.first_name}\n` +
             `🏛 <b>خزانه:</b> ${bankVault} مارک ${MARK_ANIM}\n` +
             `💎 <b>غنیمت کسب‌شده:</b> <b>+${netProfit}</b> مارک ${MARK_ANIM} 🚀`;
 
-        sendTg(token, 'sendMessage', { chat_id: chatId, text: heistReport, parse_mode: 'HTML' });
+        sendTg(token, 'sendMessage', { chat_id: user.user_id, text: heistReport, parse_mode: 'HTML' });
 
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
@@ -872,13 +883,19 @@ async function handleCallback(token, cb) {
             })
         });
 
-        // گزارش دزدی به گروه
+        // ارسال گزارش دزدی به پیوی مهاجم
         const robberyReport = `🚨 ⚔️ <b>گزارش سرقت و درگیری خیابانی!</b> ⚔️ 🚨\n\n` +
-            `🥷 <b>مهاجم:</b> ${user.first_name}\n` +
             `🎯 <b>قربانی:</b> ${target.first_name}\n` +
             `💎 <b>غنیمت به سرقت رفته:</b> <b>+${gain}</b> مارک ${MARK_ANIM}`;
 
-        sendTg(token, 'sendMessage', { chat_id: chatId, text: robberyReport, parse_mode: 'HTML' });
+        sendTg(token, 'sendMessage', { chat_id: user.user_id, text: robberyReport, parse_mode: 'HTML' });
+
+        // ارسال گزارش به پیوی قربانی
+        const victimReport = `🚨 ⚔️ <b>به شما حمله شد!</b> ⚔️ 🚨\n\n` +
+            `🥷 <b>مهاجم:</b> ${user.first_name}\n` +
+            `💎 <b>مقدار مارک به سرقت رفته:</b> <b>${gain}</b> مارک ${MARK_ANIM}`;
+
+        sendTg(token, 'sendMessage', { chat_id: target.user_id, text: victimReport, parse_mode: 'HTML' });
 
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
