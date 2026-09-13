@@ -37,6 +37,10 @@ async function getOrCreateUser(tgUser) {
         }
         return data[0];
     }
+
+    // تولید رمز عبور تصادفی ۶ رقمی برای کاربر جدید
+    const randomPassword = Math.floor(100000 + Math.random() * 900000).toString();
+
     const newUser = {
         user_id: tgUser.id,
         username: tgUser.username || null,
@@ -45,7 +49,7 @@ async function getOrCreateUser(tgUser) {
         level: 1,
         bank_balance: 0,
         reichsbank_level: 0,
-        site_password: "123456" // رمز عبور پیش‌فرض
+        site_password: randomPassword
     };
     const created = await dbFetch(`users`, {
         method: 'POST',
@@ -109,6 +113,12 @@ function getRandomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// تبدیل اعداد فارسی/عربی به انگلیسی
+function convertFaToEnNumbers(str) {
+    return str.replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+              .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+}
+
 // کیبورد دائمی مخصوص پیوی
 function getPvReplyKeyboard() {
     return {
@@ -158,30 +168,35 @@ async function handleMessage(token, msg) {
 
     const user = await getOrCreateUser(msg.from);
     const chatId = msg.chat.id;
-    const text = (msg.text || '').trim();
+    const rawText = (msg.text || '').trim();
+    const text = convertFaToEnNumbers(rawText);
     const replyMsgId = msg.message_id;
     const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
 
     // ------------------- بخش پیوی (پیام شخصی) -------------------
     if (!isGroup) {
-        // تغییر رمز عبور متنی در پیوی
-        if (user.awaiting_pass_change) {
-            if (text.length < 4) {
+        // تغییر رمز عبور متنی در پیوی (با ارسال مثلاً: رمز 5555)
+        if (text.startsWith('رمز ') || user.awaiting_pass_change) {
+            let newPass = text.startsWith('رمز ') ? text.replace('رمز ', '').trim() : text.trim();
+
+            if (newPass.length < 4) {
                 return sendTg(token, 'sendMessage', {
                     chat_id: chatId,
-                    text: '❌ <b>رمز عبور باید حداقل ۴ کاراکتر باشد!</b> دوباره تلاش کنید:',
+                    text: '❌ <b>رمز عبور باید حداقل ۴ کاراکتر باشد!</b>\nلطفاً مجدداً ارسال کنید (مثال: <code>رمز 5555</code>):',
                     reply_to_message_id: replyMsgId,
                     reply_markup: getPvReplyKeyboard(),
                     parse_mode: 'HTML'
                 });
             }
+
             await dbFetch(`users?user_id=eq.${user.user_id}`, {
                 method: 'PATCH',
-                body: JSON.stringify({ site_password: text, awaiting_pass_change: false })
+                body: JSON.stringify({ site_password: newPass, awaiting_pass_change: false })
             });
+
             return sendTg(token, 'sendMessage', {
                 chat_id: chatId,
-                text: `✅ <b>رمز عبور جدید شما با موفقیت ثبت شد!</b>\n🔐 رمز عبور جدید: <code>${text}</code>`,
+                text: `✅ <b>رمز عبور جدید شما با موفقیت ثبت شد!</b>\n🔐 رمز عبور جدید: <code>${newPass}</code>`,
                 reply_to_message_id: replyMsgId,
                 reply_markup: getPvReplyKeyboard(),
                 parse_mode: 'HTML'
@@ -214,19 +229,16 @@ async function handleMessage(token, msg) {
         }
 
         if (text === '🔑 رمز سایت') {
-            const passText = `🔑 <b>مدیریت رمز عبور سایت:</b>\n\n` +
-                `🔐 <b>رمز عبور فعلی شما:</b> <code>${user.site_password || '123456'}</code>`;
-            
-            const keyboard = {
-                inline_keyboard: [
-                    [{ text: '🔄 تغییر رمز عبور', callback_data: 'prompt_new_password' }]
-                ]
-            };
+            const passText = `🔑 <b>رمز عبور فعلی شما:</b> <code>${user.site_password}</code>\n\n` +
+                `✏️ برای تغییر رمز عبور، عبارت زیر را ارسال کنید:\n` +
+                `<code>رمز (رمز جدید)</code>\n\n` +
+                `<b>مثال:</b>\n` +
+                `<code>رمز 5555</code>`;
 
             return sendTg(token, 'sendMessage', {
                 chat_id: chatId,
                 text: passText,
-                reply_markup: keyboard,
+                reply_markup: getPvReplyKeyboard(),
                 parse_mode: 'HTML'
             });
         }
@@ -704,34 +716,6 @@ async function handleCallback(token, cb) {
     // دکمه راهنما
     if (data === 'help_menu') {
         return sendHelpMessage(token, chatId, cb.message.message_id, cb.message.chat.type === 'private');
-    }
-
-    // منوی رمز سایت
-    if (data === 'site_password_menu') {
-        const passText = `🔑 <b>مدیریت رمز عبور سایت:</b>\n\n` +
-            `🔐 <b>رمز عبور فعلی شما:</b> <code>${user.site_password || '123456'}</code>`;
-        
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '🔄 ثبت رمز جدید', callback_data: 'prompt_new_password' }],
-                [{ text: '🔙 بازگشت', callback_data: 'cancel' }]
-            ]
-        };
-
-        return sendTg(token, 'sendMessage', { chat_id: chatId, text: passText, reply_markup: keyboard, parse_mode: 'HTML' });
-    }
-
-    // درخواست تغییر رمز
-    if (data === 'prompt_new_password') {
-        await dbFetch(`users?user_id=eq.${user.user_id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ awaiting_pass_change: true })
-        });
-        return sendTg(token, 'sendMessage', {
-            chat_id: chatId,
-            text: `✏️ <b>لطفاً رمز عبور جدید خود را ارسال کنید:</b>\n<i>(حداقل ۴ کاراکتر)</i>`,
-            parse_mode: 'HTML'
-        });
     }
 
     if (data === 'quick_deposit_1000' || data === 'quick_deposit_all') {
