@@ -1,6 +1,6 @@
 /**
  * PishvaBot - Telegram Bot Engine on Cloudflare Workers & Supabase
- * Fixed Version with Group-Only Game Logic, Permanent PV Keyboard & Private Notifications
+ * Fixed Version with Custom Titles, Titles/Ranks logic, Permanent PV Keyboard & Private Notifications
  */
 
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
@@ -114,9 +114,12 @@ const TROPHIES = {
 
 // ------------------- HELPER FUNCTIONS -------------------
 function getTitle(level) {
-    if (level <= 3) return "🎖️ سرباز صفر";
-    if (level <= 5) return "⚔️ جناب سروان";
-    return "👑 افسر ارشد پیشوا";
+    if (level === 6) return "قائم مقام پیشوا";
+    if (level === 5) return "مارشال ارشد رایش";
+    if (level === 4) return "رهبر سراسری رایش";
+    if (level === 3) return "جنرال اوبرست";
+    if (level === 2) return "اوبر گفریتر";
+    return "شوتزه";
 }
 
 function getRandomInt(min, max) {
@@ -217,7 +220,7 @@ async function handleMessage(token, msg) {
 
         // دستور /start در پیوی
         if (text === '/start') {
-            const welcomeText = `👑 <b>به بات رسمی پیشوا بزرگ خوش آمدید!</b> 👑\n\n` +
+            const welcomeText = `👑 <b>به بات رسمی رایش بزرگ خوش آمدید!</b> 👑\n\n` +
                 `⚔️ <i>مقر فرماندهی نیروهای رایش بزرگ</i>\n\n` +
                 `⚠️ <b>توجه:</b> تمام عملیات‌ها، بازی‌ها و نبردها <b>فقط و فقط داخل گروه</b> امکان‌پذیر است.\n\n` +
                 `👇 جهت دسترسی سریع می‌توانید از دکمه‌های کیبورد استفاده کنید:`;
@@ -270,6 +273,41 @@ async function handleMessage(token, msg) {
 
     if (text === 'راهنما') {
         return sendHelpMessage(token, chatId, replyMsgId, false);
+    }
+
+    // ثبت لقب جدید
+    if (text.startsWith('لقب ')) {
+        const newNick = text.replace('لقب ', '').trim();
+        
+        if (!newNick) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '❌ <b>لطفاً لقب مورد نظر خود را وارد کنید!</b>\nمثال: <code>لقب علی</code>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        if (newNick.includes('مقام ها') || newNick.includes('پیشوا')) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '❌ <b>استفاده از کلمات «مقام ها» و «پیشوا» در لقب مجاز نمی‌باشد!</b>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ nickname: newNick })
+        });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `✅ <b>لقب شما با موفقیت ثبت شد:</b> <code>${newNick}</code>`,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'HTML'
+        });
     }
 
     // 1. مجازات برای کلمات ممنوعه
@@ -331,7 +369,7 @@ async function handleMessage(token, msg) {
 
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `🫡 <b>درود بر پیشوا!</b> 👑\n\n` +
+            text: `🫡 <b>درود بر ارتش بزرگ!</b> ⚔️\n\n` +
                 `💎 <b>پاداش وفاداری:</b> <b>+${reward}</b> مارک ${MARK_ANIM}\n` +
                 `💰 <b>موجودی کل:</b> <b>${user.marks + reward}</b> مارک ${MARK_ANIM}`,
             reply_to_message_id: replyMsgId,
@@ -339,7 +377,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 3. دریافت آمار (به‌روزرسانی شده با آمار برد و باخت دزدی از سرباز)
+    // 3. دریافت آمار (به‌روزرسانی شده با لقب)
     if (text === 'آمار' || text === 'امار' || text === 'آمارش' || text === 'امارش' || text.startsWith('آمار @') || text.startsWith('امار @')) {
         let targetUser = user;
 
@@ -361,10 +399,13 @@ async function handleMessage(token, msg) {
             if (ARMORS[i.item_name]) health += ARMORS[i.item_name].health * i.quantity;
         });
 
+        const nickText = targetUser.nickname ? `🏷 <b>لقب:</b> ${targetUser.nickname}\n` : '';
+
         const statsText = `📜 ✨ <b>شناسنامه و آمار نظامی:</b> ✨ 📜\n` +
             `✨ ────────────────── ✨\n\n` +
             `👤 <b>نام رزمنده:</b> ${targetUser.first_name}\n` +
-            `🎖 <b>درجه نظامی:</b> ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
+            nickText +
+            `🎖 <b>مقام نظامی:</b> ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
             `💎 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
             `🏛 <b>سپرده رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
             `🗡 <b>قدرت تهاجمی:</b> <b>${power}</b> HP 💣\n` +
@@ -808,11 +849,12 @@ async function handleMessage(token, msg) {
 
 // تابع راهنمای کامل
 function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
-    const helpText = `⚔️ 🔥 <b>پایگاه اطلاعاتی پیشوا بات</b> 🔥 ⚔️\n` +
+    const helpText = `⚔️ 🔥 <b>پایگاه اطلاعاتی بات</b> 🔥 ⚔️\n` +
         `✨ ────────────────── ✨\n\n` +
         `🚨 <b>مهم: بازی فقط درون گروه فعال می‌باشد!</b>\n\n` +
         `🫡 <b>درود</b> ➔ دریافت پاداش روزانه (دارای زمان انتظار)\n` +
-        `📊 <b>آمار / آمارش</b> ➔ مشاهده شناسنامه رزمی و مالی شما\n` +
+        `📊 <b>آمار / آمارش</b> ➔ مشاهده شناسنامه رزمی، لقب و مالی شما\n` +
+        `🏷 <b>لقب [اسم]</b> ➔ ثبت لقب جدید برای خودتان (مثال: <code>لقب علی</code>)\n` +
         `💀 <b>بازار سیاه</b> ➔ خرید تسلیحات سنگین و زره‌های نظامی\n` +
         `🏛 <b>بانک</b> ➔ مدیریت سرمایه و سپرده‌گذاری در رایشس بانک\n` +
         `💳 <b>واریز به بانک [مقدار]</b> ➔ انتقال پول از جیب به رایشس بانک\n` +
@@ -1090,54 +1132,6 @@ async function handleCallback(token, cb) {
                 `📈 نرخ سود ساعتی شما: <b>${rate}%</b>\n` +
                 `💎 سود محاسبه شده (${hours} ساعت): <b>+${profit}</b> مارک ${MARK_ANIM} 🚀\n\n` +
                 `✅ <i>مبلغ سود مستقیم به جیب شما واریز شد.</i>`,
-            parse_mode: 'HTML'
-        });
-    }
-
-    if (data === 'upgrade_reichsbank') {
-        if (user.bank_balance < 6000) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ برای ارتقای رایشس بانک باید حداقل ۶۰۰۰ مارک در سپرده بانک داشته باشید!', show_alert: true });
-        }
-
-        const costs = { 0: 2500, 1: 3200, 2: 4000, 3: 5200, 4: 6000, 5: 13000 };
-        const nextLvl = (user.reichsbank_level || 0) + 1;
-
-        if (nextLvl > 6) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '👑 رایشس بانک شما در حداکثر سطح قرار دارد!', show_alert: true });
-        }
-
-        const cost = costs[user.reichsbank_level || 0];
-        if (user.marks < cost) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: `❌ مارک کافی در جیب نداری! هزینه: ${cost} مارک`, show_alert: true });
-        }
-
-        await dbFetch(`users?user_id=eq.${user.user_id}`, {
-            method: 'PATCH',
-            body: JSON.stringify({
-                marks: user.marks - cost,
-                reichsbank_level: nextLvl
-            })
-        });
-
-        return sendTg(token, 'editMessageText', {
-            chat_id: chatId,
-            message_id: cb.message.message_id,
-            text: `🏛 👑 <b>رایشس بانک با موفقیت ارتقا یافت!</b> 👑\n\n` +
-                `🌟 سطح جدید: <b>سطح ${nextLvl}</b>\n` +
-                `🚀 ضریب سود پرداختی شما به شدت افزایش یافت!`,
-            parse_mode: 'HTML'
-        });
-    }
-
-    if (data === 'sell_trophies_prompt') {
-        return sendTg(token, 'editMessageText', {
-            chat_id: chatId,
-            message_id: cb.message.message_id,
-            text: `💎 💵 <b>راهنمای فروش صیدهای قفس:</b> 💵 💎\n\n` +
-                `برای فروش شکارها عبارت زیر را ارسال نمایید:\n\n` +
-                ` <code>فروش [تعداد] [نام شکار]</code> \n\n` +
-                `📌 <b>مثال:</b>\n` +
-                ` <code>فروش 6 دورگه</code>`,
             parse_mode: 'HTML'
         });
     }
