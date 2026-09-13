@@ -1,724 +1,778 @@
-import { Bot, InlineKeyboard, webhookCallback } from "grammy";
-import { createClient } from "@supabase/supabase-js";
+/**
+ * PishvaBot - Telegram Bot Engine on Cloudflare Workers & Supabase
+ */
 
-// تنظیمات ثابت (اطلاعات Supabase تغییری نکرده است)
-const BOT_TOKEN = "8820980497:AAH7pJaEBk9gOYBAPllruazDLDLWlPW5hrI";
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inppb2RtZWt5ZXFxaGdnd2pibHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTA2MTM5MiwiZXhwIjoyMTA0NjM3MzkyfQ.EcDkLO0H8x5hyXRI3X6P0vvu4ihIuQnoDOOPRxjP3pg";
 
-const pishvabot = new Bot(BOT_TOKEN);
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// ------------------- SUPABASE CLIENT UTILS -------------------
+async function dbFetch(endpoint, options = {}) {
+    options.headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+        ...options.headers
+    };
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${endpoint}`, options);
+    if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`DB Error [${res.status}]: ${err}`);
+    }
+    return res.json();
+}
 
-pishvabot.catch((err) => {
-  console.error(`[ERROR] ${err.ctx.update.update_id}:`, err.error);
-});
+async function getOrCreateUser(tgUser) {
+    const data = await dbFetch(`users?user_id=eq.${tgUser.id}`);
+    if (data.length > 0) {
+        if (tgUser.username && data[0].username !== tgUser.username) {
+            await dbFetch(`users?user_id=eq.${tgUser.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ username: tgUser.username, first_name: tgUser.first_name })
+            });
+        }
+        return data[0];
+    }
+    const newUser = {
+        user_id: tgUser.id,
+        username: tgUser.username || null,
+        first_name: tgUser.first_name || "سرباز",
+        marks: 0,
+        level: 1
+    };
+    const created = await dbFetch(`users`, {
+        method: 'POST',
+        body: JSON.stringify(newUser)
+    });
+    return created[0];
+}
 
-// داده‌های بازار سیاه
+async function getUserByUsername(username) {
+    const cleanUsername = username.replace('@', '');
+    const data = await dbFetch(`users?username=eq.${cleanUsername}`);
+    return data[0] || null;
+}
+
+// ------------------- GAME CONSTANTS -------------------
 const WEAPONS = {
-  bat: { name: "چوب بیسبال 🪵", price: 1000, power: 50 },
-  knife: { name: "چاقو 🔪", price: 1200, power: 65 },
-  pistol: { name: "پیستول 🔫", price: 5200, power: 100 },
-  grenade: { name: "نارنجک 💣", price: 6000, power: 200 },
-  shotgun: { name: "شاتگان 💥", price: 7000, power: 210 },
-  sniper: { name: "اسنایپر 🎯", price: 10000, power: 300 },
-  rpg: { name: "آر پی جی 🚀", price: 10000, power: 300 }
+    'چوب بیسبال': { price: 1000, damage: 50 },
+    'چاقو': { price: 1200, damage: 65 },
+    'پیستول': { price: 5200, damage: 100 },
+    'نارنجک': { price: 6000, damage: 200 },
+    'شاتگان': { price: 7000, damage: 210 },
+    'اسنایپر': { price: 10000, damage: 300 },
+    'آر پی جی': { price: 10000, damage: 300 }
 };
 
 const ARMORS = {
-  mask: { name: "ماسک صورت 🎭", price: 1000, hp: 0 },
-  vest1: { name: "جلیقه سطح ۱ 🛡", price: 1000, hp: 200 },
-  vest3: { name: "جلیقه سطح ۳ 🛡", price: 2800, hp: 600 },
-  vest5: { name: "جلیقه سطح ۵ 🛡", price: 3999, hp: 1000 },
-  knee: { name: "زانوبند 🦵", price: 2000, hp: 400 },
-  police: { name: "لباس جعلی پلیس 👮‍♂️", price: 8000, hp: 2500 }
+    'ماسک پوشاندن صورت': { price: 1000, health: 0 },
+    'جلیقه سطح ۱': { price: 1000, health: 200 },
+    'جلیقه سطح ۳': { price: 2800, health: 600 },
+    'جلیقه سطح ۵': { price: 3999, health: 1000 },
+    'زانو بند': { price: 2000, health: 400 },
+    'لباس جعلی پلیس': { price: 8000, health: 2500 }
 };
 
-// اطلاعات شکار
-const HUNT_TARGETS = {
-  hybrid: { name: "دورگه 🐕", price: 200 },
-  non_pure: { name: "غیر اصیل 🐺", price: 400 },
-  parasite: { name: "انگل 🐛", price: 800 },
-  freeloader: { name: "مفت خور 🪰", price: 1600 },
-  pests: { name: "آفت‌ها 🐀", price: 2000 },
-  insects: { name: "حشرات موذی 🦟", price: 4000 }
+const RIFLE_LEVELS = {
+    1: 100,
+    2: 1200,
+    3: 3000,
+    4: 7000,
+    5: 14000,
+    6: 30000
 };
 
-const GUN_UPGRADES = {
-  1: 100,
-  2: 1200,
-  3: 3000,
-  4: 7000,
-  5: 14000,
-  6: 30000
+const TROPHIES = {
+    'دورگه': 200,
+    'غیر اصیل': 400,
+    'انگل': 800,
+    'مفت خور': 1600,
+    'آفت': 2000,
+    'حشرات موذی': 4000
 };
 
-// محاسبه سطح براساس مارک
-function getLevel(marks) {
-  const m = marks || 0;
-  if (m >= 20000) return 6;
-  if (m >= 10000) return 5;
-  if (m >= 6000) return 4;
-  if (m >= 4000) return 3;
-  if (m >= 3000) return 2;
-  return 1;
+// ------------------- HELPER FUNCTIONS -------------------
+function getTitle(level) {
+    if (level <= 3) return "آشغال سرباز 🎖";
+    if (level <= 5) return "جناب سرباز 🎖";
+    return "سرهنگ ارشد 🎖";
 }
 
-// تعیین لحن و درجه بر اساس سطح
-function getTitleAndTone(level, name) {
-  const safeName = name || "سرباز";
-  if (level <= 3) return { title: `عنصر بی‌ارزش (${safeName}) 🗑`, prefix: "آهای آشغال! " };
-  if (level <= 5) return { title: `سرباز ارشد (${safeName}) 🎖`, prefix: "جناب سرباز، " };
-  return { title: `فرمانده کبیر (${safeName}) 👑⚡️`, prefix: "قربان! با احترام کامل، " };
+function getToneGreeting(level, name) {
+    if (level <= 3) return `هی آشغال (${name})! بنال ببینم چی میخوای! 🗿🔥`;
+    if (level <= 5) return `سرباز (${name})، گزارش بده! وضعیت رو اعلام کن. 🎖💥`;
+    return `درود و ادای احترام خدمت جناب سرهنگ (${name})! گوش به فرمانیم فرمانده! 🫡⚔️`;
 }
 
-// دریافت یا ایجاد کاربر
-async function getUser(ctx) {
-  const u = ctx.from;
-  if (!u) return null;
-
-  try {
-    let { data: user } = await supabase.from("users").select("*").eq("user_id", u.id).maybeSingle();
-
-    if (!user) {
-      const newUser = { 
-        user_id: u.id, 
-        username: u.username || "", 
-        first_name: u.first_name || "سرباز", 
-        marks: 0,
-        dorood_count: 0,
-        punish_count: 0,
-        attack_count: 0
-      };
-      
-      const { data: insertedUser } = await supabase.from("users").insert([newUser]).select().single();
-      await supabase.from("inventory").insert([{ user_id: u.id, weapons: [], armors: [] }]);
-      await supabase.from("bank").insert([{ user_id: u.id, reichs_balance: 0, reichs_level: 0 }]);
-      await supabase.from("hunting").insert([{ user_id: u.id, gun_level: 0 }]);
-      user = insertedUser || newUser;
-    } else if (u.username && user.username !== u.username) {
-      await supabase.from("users").update({ username: u.username }).eq("user_id", u.id);
-    }
-    return user;
-  } catch (e) {
-    console.error("getUser error:", e);
-    return { user_id: u.id, username: u.username || "", first_name: u.first_name || "سرباز", marks: 0 };
-  }
+function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-// دریافت تجهیزات و قدرت
-async function getStats(userId) {
-  try {
-    const { data: inv } = await supabase.from("inventory").select("*").eq("user_id", userId).maybeSingle();
-    let power = 0, hp = 100;
-    if (inv) {
-      (inv.weapons || []).forEach(w => power += (WEAPONS[w]?.power || 0));
-      (inv.armors || []).forEach(a => hp += (ARMORS[a]?.hp || 0));
-    }
-    return { power, hp, inv };
-  } catch (e) {
-    return { power: 0, hp: 100, inv: null };
-  }
+// ------------------- TELEGRAM API WRAPPER -------------------
+async function sendTg(token, method, payload) {
+    const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    return res.json();
 }
 
-// ==========================================
-// پردازش پیام‌های متنی
-// ==========================================
-pishvabot.on("message:text", async (ctx) => {
-  try {
-    const rawText = ctx.message.text.trim();
-    const cleanText = rawText.replace(/\s+/g, "").toLowerCase();
-
-    // ۱. بازار سیاه
-    if (cleanText.includes("بازارسیاه")) {
-      const kb = new InlineKeyboard()
-        .text("🪵 چوب بیسبال (1000)", "buy_weapon_bat")
-        .text("🔪 چاقو (1200)", "buy_weapon_knife").row()
-        .text("🔫 پیستول (5200)", "buy_weapon_pistol")
-        .text("💣 نارنجک (6000)", "buy_weapon_grenade").row()
-        .text("💥 شاتگان (7000)", "buy_weapon_shotgun")
-        .text("🎯 اسنایپر (10000)", "buy_weapon_sniper").row()
-        .text("🚀 آر پی جی (10000)", "buy_weapon_rpg").row()
-        .text("🎭 ماسک صورت (1000)", "buy_armor_mask")
-        .text("🛡 جلیقه لول ۱ (1000)", "buy_armor_vest1").row()
-        .text("🛡 جلیقه لول ۳ (2800)", "buy_armor_vest3")
-        .text("🛡 جلیقه لول ۵ (3999)", "buy_armor_vest5").row()
-        .text("🦵 زانوبند (2000)", "buy_armor_knee")
-        .text("👮‍♂️ لباس پلیس (8000)", "buy_armor_police");
-
-      return ctx.reply(`وارد بازار سیاه (مقر کاپو) شدید. تجهیزات مورد نیاز را انتخاب کنید: 🖤🕶`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb
-      });
-    }
-
-    const user = await getUser(ctx);
-    if (!user) return;
-
-    const lvl = getLevel(user.marks);
-    const tone = getTitleAndTone(lvl, user.first_name);
-
-    // ۲. کلمات ممنوعه
-    if (["سلام", "های", "هلو"].some(w => rawText.toLowerCase().includes(w))) {
-      const penaltyMap = { 1: 120, 2: 130, 3: 140, 4: 4000, 5: 5000, 6: 5000 };
-      const penalty = penaltyMap[lvl] || 120;
-      
-      await supabase.from("users").update({
-        marks: Math.max(0, (user.marks || 0) - penalty),
-        punish_count: (user.punish_count || 0) + 1
-      }).eq("user_id", user.user_id);
-
-      return ctx.reply(`${tone.prefix}استفاده از کلمات غیرنظامی ممنوع است! 🚫\nجریمه: ${penalty} مارک کسر شد.`, { reply_to_message_id: ctx.message.message_id });
-    }
-
-    // ۳. سیستم درود
-    if (cleanText === "درود") {
-      const now = new Date();
-      const cooldowns = { 1: 30, 2: 30, 3: 60, 4: 150, 5: 120, 6: 120 };
-      const rewards = {
-        1: [50, 120], 2: [120, 130], 3: [130, 140],
-        4: [250, 320], 5: [420, 500], 6: [1000, 1000]
-      };
-
-      if (user.last_dorood_at) {
-        const diff = (now - new Date(user.last_dorood_at)) / 1000;
-        if (diff < cooldowns[lvl]) {
-          const remaining = Math.ceil(cooldowns[lvl] - diff);
-          return ctx.reply(`${tone.prefix}تجهیز مجدد زمان‌بر است! ${remaining} ثانیه دیگر صبر کنید ⏱`, { reply_to_message_id: ctx.message.message_id });
-        }
-      }
-
-      const [min, max] = rewards[lvl];
-      const prize = Math.floor(Math.random() * (max - min + 1)) + min;
-      const newMarks = (user.marks || 0) + prize;
-
-      await supabase.from("users").update({
-        marks: newMarks,
-        dorood_count: (user.dorood_count || 0) + 1,
-        last_dorood_at: now.toISOString()
-      }).eq("user_id", user.user_id);
-
-      return ctx.reply(`${tone.prefix}درود نظامی دریافت شد! 🫡\nپاداش: ${prize} مارک به خزانه اضافه شد.\nموجودی جدید: ${newMarks} مارک.`, { reply_to_message_id: ctx.message.message_id });
-    }
-
-    // ۴. آمار
-    if (cleanText.startsWith("امار") || cleanText.startsWith("آمار") || cleanText === "امارش") {
-      let targetUser = user;
-
-      if (ctx.message.reply_to_message && ctx.message.reply_to_message.from) {
-        const targetId = ctx.message.reply_to_message.from.id;
-        const { data } = await supabase.from("users").select("*").eq("user_id", targetId).maybeSingle();
-        if (data) targetUser = data;
-      } else if (rawText.includes("@")) {
-        const uname = rawText.split("@")[1].trim();
-        const { data } = await supabase.from("users").select("*").eq("username", uname).maybeSingle();
-        if (data) targetUser = data;
-      }
-
-      const targetLvl = getLevel(targetUser.marks);
-      const targetTone = getTitleAndTone(targetLvl, targetUser.first_name);
-      const { power, hp } = await getStats(targetUser.user_id);
-
-      const msg = `📊 **پرونده پرسنلی نظامی:**\n` +
-        `👤 هویت: ${targetTone.title}\n` +
-        `🎖 درجه (سطح): ${targetLvl}\n` +
-        `💰 دارایی (مارک): ${targetUser.marks || 0}\n` +
-        `⚔️ قدرت تهاجمی: ${power}\n` +
-        `🛡 زره و سلامت: ${hp}\n` +
-        `🫡 تعداد درودها: ${targetUser.dorood_count || 0}\n` +
-        `⚔️ تعداد حملات: ${targetUser.attack_count || 0}\n` +
-        `❌ جریمه‌های انضباطی: ${targetUser.punish_count || 0}`;
-
-      return ctx.reply(msg, { reply_to_message_id: ctx.message.message_id, parse_mode: "Markdown" });
-    }
-
-    // ۵. دزدی از بانک
-    if (cleanText.includes("دزدیازبانک")) {
-      const { power, hp } = await getStats(user.user_id);
-      const kb = new InlineKeyboard()
-        .text("💥 تایید حمله به بانک", "confirm_rob_bank")
-        .text("❌ انصراف", "cancel_action");
-
-      return ctx.reply(`${tone.prefix}بررسی وضعیت عملیاتی:\n⚔️ قدرت ضربه: ${power}\n🛡 سلامت: ${hp}\n\nآیا از حمله مسلحانه به بانک مرکزی اطمینان دارید؟ ⚠️`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb
-      });
-    }
-
-    // ۶. دزدی از سرباز
-    if (cleanText.includes("دزدیازسرباز")) {
-      const kb = new InlineKeyboard()
-        .text("⚔️ تایید حمله به نزدیک‌ترین سرباز", "confirm_rob_user")
-        .text("❌ انصراف", "cancel_action");
-
-      return ctx.reply(`${tone.prefix}شناسایی هدف در محدوده... آیا قصد شبیخون به یک سرباز را دارید؟ 🗡`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb
-      });
-    }
-
-    // ۷. انتقال مارک
-    if (cleanText.startsWith("انتقال")) {
-      const parts = rawText.split(" ");
-      const amount = parseInt(parts[1]);
-
-      if (isNaN(amount) || amount <= 0) {
-        return ctx.reply(`${tone.prefix}فرمان نامعتبر! فرمت صحیح:\nانتقال 500 (روی پیام) یا انتقال 500 @ali`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      let targetId = null;
-      if (ctx.message.reply_to_message && ctx.message.reply_to_message.from) {
-        targetId = ctx.message.reply_to_message.from.id;
-      } else if (parts[2] && parts[2].startsWith("@")) {
-        const targetUsername = parts[2].replace("@", "");
-        const { data } = await supabase.from("users").select("user_id").eq("username", targetUsername).maybeSingle();
-        if (data) targetId = data.user_id;
-      }
-
-      if (!targetId) return ctx.reply(`${tone.prefix}هدف مورد نظر یافت نشد!`, { reply_to_message_id: ctx.message.message_id });
-      if ((user.marks || 0) < amount) return ctx.reply(`${tone.prefix}خزانه شما خالی است! موجودی کافی نیست. ❌`, { reply_to_message_id: ctx.message.message_id });
-
-      const kb = new InlineKeyboard()
-        .text("✅ تایید و انتقال", `confirm_transfer_${targetId}_${amount}`)
-        .text("❌ انصراف", "cancel_action");
-
-      return ctx.reply(`${tone.prefix}آیا از انتقال ${amount} مارک به فرد موردنظر اطمینان دارید؟ 💸`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb
-      });
-    }
-
-    // ۸. بخش بانک و رایشس بانک
-    if (cleanText === "بانک") {
-      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
-      const rBalance = bankData?.reichs_balance || 0;
-
-      const kb = new InlineKeyboard()
-        .text("📈 سود گرفتن از بانک", "bank_claim_profit").row()
-        .text("⚡️ ارتقای رایشس بانک", "bank_upgrade");
-
-      return ctx.reply(`🏦 **بانک مرکزی و رایشس بانک:**\n\n💰 موجودی شخصی: ${user.marks || 0} مارک\n🏛 موجودی در رایشس بانک: ${rBalance} مارک\n🎖 لول رایشس بانک: ${bankData?.reichs_level || 0}`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb,
-        parse_mode: "Markdown"
-      });
-    }
-
-        // ۸.۵. واریز به رایشس بانک (مثال: واریز به بانک 1000)
-    if (cleanText.startsWith("واریزبهبانک")) {
-      const parts = rawText.split(" ");
-      const amount = parseInt(parts[1]);
-
-      if (isNaN(amount) || amount <= 0) {
-        return ctx.reply(`${tone.prefix}فرمان نامعتبر! فرمت صحیح:\n` + "`واریز به بانک 1000`", {
-          reply_to_message_id: ctx.message.message_id,
-          parse_mode: "Markdown"
-        });
-      }
-
-      if ((user.marks || 0) < amount) {
-        return ctx.reply(`${tone.prefix}موجودی مارک شما کافی نیست! ❌`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      // دریافت اطلاعات بانک کاربر
-      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
-      const currentBankBalance = bankData?.reichs_balance || 0;
-
-      // کسر از حساب شخصی و افزودن به رایشس بانک
-      await supabase.from("users").update({ marks: user.marks - amount }).eq("user_id", user.user_id);
-      await supabase.from("bank").upsert({
-        user_id: user.user_id,
-        reichs_balance: currentBankBalance + amount,
-        reichs_level: bankData?.reichs_level || 0
-      });
-
-      return ctx.reply(`${tone.prefix}مبلغ ${amount} مارک با موفقیت به رایشس بانک واریز شد. 🏛\nموجودی جدید بانک: ${currentBankBalance + amount} مارک`, {
-        reply_to_message_id: ctx.message.message_id
-      });
-    }
-
-    // ۸.۶. برداشت از رایشس بانک (مثال: برداشت از بانک 1000)
-    if (cleanText.startsWith("برداشتازبانک")) {
-      const parts = rawText.split(" ");
-      const amount = parseInt(parts[1]);
-
-      if (isNaN(amount) || amount <= 0) {
-        return ctx.reply(`${tone.prefix}فرمان نامعتبر! فرمت صحیح:\n` + "`برداشت از بانک 1000`", {
-          reply_to_message_id: ctx.message.message_id,
-          parse_mode: "Markdown"
-        });
-      }
-
-      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
-      const currentBankBalance = bankData?.reichs_balance || 0;
-
-      if (currentBankBalance < amount) {
-        return ctx.reply(`${tone.prefix}موجودی شما در رایشس بانک کافی نیست! ❌`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      // کسر از رایشس بانک و افزودن به حساب شخصی
-      await supabase.from("bank").update({ reichs_balance: currentBankBalance - amount }).eq("user_id", user.user_id);
-      await supabase.from("users").update({ marks: (user.marks || 0) + amount }).eq("user_id", user.user_id);
-
-      return ctx.reply(`${tone.prefix}مبلغ ${amount} مارک از رایشس بانک برداشت شد و به حساب شخصی شما منتقل گردید. 💵`, {
-        reply_to_message_id: ctx.message.message_id
-      });
-    }
-
-    // ۹. تفنگ شکاری
-    if (cleanText.includes("تفنگشکاری")) {
-      const { data: hData } = await supabase.from("hunting").select("gun_level").eq("user_id", user.user_id).maybeSingle();
-      const curLvl = hData?.gun_level || 0;
-      const nextLvl = curLvl + 1;
-
-      if (nextLvl > 6) {
-        return ctx.reply(`${tone.prefix}تفنگ شکاری شما در حداکثر سطح ممکن (سطح ۶) قرار دارد! 🎯`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      const cost = GUN_UPGRADES[nextLvl];
-      const kb = new InlineKeyboard()
-        .text(`🎯 ارتقا به لول ${nextLvl} (${cost} مارک)`, `confirm_buy_gun_${nextLvl}_${cost}`)
-        .text("❌ انصراف", "cancel_action");
-
-      return ctx.reply(`${tone.prefix}سطح فعلی تفنگ شکاری شما: ${curLvl}\nهزینه ارتقا به لول ${nextLvl}: ${cost} مارک.\nآیا تایید می‌کنید؟`, {
-        reply_to_message_id: ctx.message.message_id,
-        reply_markup: kb
-      });
-    }
-
-    // ۱۰. شکار کردن
-    if (cleanText === "شکار") {
-      const { data: hData } = await supabase.from("hunting").select("*").eq("user_id", user.user_id).maybeSingle();
-      const gunLvl = hData?.gun_level || 0;
-
-      if (gunLvl === 0) {
-        return ctx.reply(`${tone.prefix}شما تفنگ شکاری ندارید! با فرستادن کلمه "تفنگ شکاری" اقدام به خرید کنید. 🎯`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      const rand = Math.random() * 100;
-      let targetKey = "";
-
-      if (gunLvl === 1) targetKey = "hybrid";
-      else if (gunLvl === 2) targetKey = rand <= 10 ? "hybrid" : "non_pure";
-      else if (gunLvl === 3) targetKey = rand <= 2 ? "hybrid" : rand <= 10 ? "non_pure" : "parasite";
-      else if (gunLvl === 4) targetKey = rand <= 1 ? "hybrid" : rand <= 3 ? "non_pure" : rand <= 6 ? "parasite" : "freeloader";
-      else if (gunLvl === 5) targetKey = rand <= 5 ? "freeloader" : "pests";
-      else if (gunLvl === 6) targetKey = rand <= 30 ? "pests" : "insects";
-
-      const targetObj = HUNT_TARGETS[targetKey];
-      await supabase.from("hunting").update({
-        [targetKey]: (hData[targetKey] || 0) + 1
-      }).eq("user_id", user.user_id);
-
-      return ctx.reply(`${tone.prefix}عملیات شکار موفقیت‌آمیز بود! 🏹\nشما یک **${targetObj.name}** شکار کردید و به قفس منتقل شد.`, {
-        reply_to_message_id: ctx.message.message_id,
-        parse_mode: "Markdown"
-      });
-    }
-
-    // ۱۱. قفس شکار
-    if (cleanText === "قفس") {
-      const { data: hData } = await supabase.from("hunting").select("*").eq("user_id", user.user_id).maybeSingle();
-      
-      let totalVal = 0;
-      let text = "🕸 **محتویات قفس شکار شما:**\n\n";
-
-      for (const [k, obj] of Object.entries(HUNT_TARGETS)) {
-        const count = hData ? (hData[k] || 0) : 0;
-        const val = count * obj.price;
-        totalVal += val;
-        text += `• ${obj.name}: ${count} عدد (ارزش: ${val} مارک)\n`;
-      }
-
-      text += `\n💰 **ارزش کل شکارها:** ${totalVal} مارک`;
-
-      const kb = new InlineKeyboard().text("🏷 فروش شکارها", "sell_hunting_prompt");
-
-      return ctx.reply(text, { reply_to_message_id: ctx.message.message_id, reply_markup: kb, parse_mode: "Markdown" });
-    }
-
-    // ۱۲. دستور فروش دستی
-    if (cleanText.startsWith("فروش")) {
-      const parts = rawText.split(" ");
-      const count = parseInt(parts[1]);
-      const name = parts[2];
-
-      if (isNaN(count) || count <= 0 || !name) {
-        return ctx.reply(`${tone.prefix}فرمان نامعتبر! فرمت صحیح: \nفروش 6 دورگه`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      let keyFound = null;
-      for (const [k, obj] of Object.entries(HUNT_TARGETS)) {
-        if (obj.name.includes(name)) {
-          keyFound = k;
-          break;
-        }
-      }
-
-      if (!keyFound) return ctx.reply(`${tone.prefix}نوع شکار یافت نشد!`, { reply_to_message_id: ctx.message.message_id });
-
-      const { data: hData } = await supabase.from("hunting").select("*").eq("user_id", user.user_id).maybeSingle();
-      const currentCount = hData ? (hData[keyFound] || 0) : 0;
-
-      if (currentCount < count) {
-        return ctx.reply(`${tone.prefix}تعداد موجود در قفس کافی نیست! (موجودی: ${currentCount})`, { reply_to_message_id: ctx.message.message_id });
-      }
-
-      const totalEarned = count * HUNT_TARGETS[keyFound].price;
-
-      await supabase.from("hunting").update({ [keyFound]: currentCount - count }).eq("user_id", user.user_id);
-      await supabase.from("users").update({ marks: (user.marks || 0) + totalEarned }).eq("user_id", user.user_id);
-
-      return ctx.reply(`${tone.prefix}تعداد ${count} عدد ${HUNT_TARGETS[keyFound].name} فروخته شد.\nمبلغ ${totalEarned} مارک به حساب شما اضافه شد. 💵`, {
-        reply_to_message_id: ctx.message.message_id
-      });
-    }
-
-    // ۱۳. راهنما
-    if (cleanText === "راهنما") {
-      const help = `📜 **راهنمای جامع ربات پیشوا:**\n\n` +
-        `🫡 **درود**: دریافت پاداش روزانه/دوره‌ای مارک\n` +
-        `🖤 **بازار سیاه**: خرید سلاح و جلیقه دفاعی\n` +
-        `🏦 **دزدی از بانک**: حمله مسلحانه به بانک‌ها\n` +
-        `⚔️ **دزدی از سرباز**: نبرد تصادفی با سربازان\n` +
-        `📊 **امار**: مشاهده پرونده نظامی خود یا دیگران\n` +
-        `💸 **انتقال <مقدار>**: انتقال مارک به دیگران\n` +
-        `🏦 **بانک**: ورود به سیستم رایشس بانک و مدیریت سود\n` +
-        `🎯 **تفنگ شکاری**: خرید و ارتقای تفنگ شکاری\n` +
-        `🏹 **شکار**: شکار حیوانات بر اساس سطح تفنگ\n` +
-        `🕸 **قفس**: مشاهده و فروش شکارهای قفس\n` +
-        `⚠️ **کلمات ممنوعه**: سلام، های، هلو (موجب جریمه سنگین)`;
-
-      return ctx.reply(help, { reply_to_message_id: ctx.message.message_id, parse_mode: "Markdown" });
-    }
-
-  } catch (e) {
-    console.error("Text Handler Error:", e);
-  }
-});
-
-// ==========================================
-// پردازش دکمه‌های شیشه‌ای (Callback Query)
-// ==========================================
-pishvabot.on("callback_query:data", async (ctx) => {
-  try {
-    const data = ctx.callbackQuery.data;
-    const user = await getUser(ctx);
-    if (!user) return;
-
-    if (data === "cancel_action") {
-      await ctx.answerCallbackQuery("عملیات لغو شد.");
-      return ctx.editMessageText("عملیات توسط کاربر لغو گردید. 🛑");
-    }
-
-    // خرید از بازار سیاه
-    if (data.startsWith("buy_weapon_") || data.startsWith("buy_armor_")) {
-      const isWeapon = data.startsWith("buy_weapon_");
-      const itemKey = data.replace(isWeapon ? "buy_weapon_" : "buy_armor_", "");
-      const item = isWeapon ? WEAPONS[itemKey] : ARMORS[itemKey];
-
-      if ((user.marks || 0) < item.price) {
-        return ctx.answerCallbackQuery({ text: "موجودی مارک شما کافی نیست! ❌", show_alert: true });
-      }
-
-      await supabase.from("users").update({ marks: user.marks - item.price }).eq("user_id", user.user_id);
-      const { data: inv } = await supabase.from("inventory").select("*").eq("user_id", user.user_id).maybeSingle();
-      const currentInv = inv || { weapons: [], armors: [] };
-
-      if (isWeapon) {
-        await supabase.from("inventory").upsert({ user_id: user.user_id, weapons: [...(currentInv.weapons || []), itemKey], armors: currentInv.armors || [] });
-      } else {
-        await supabase.from("inventory").upsert({ user_id: user.user_id, weapons: currentInv.weapons || [], armors: [...(currentInv.armors || []), itemKey] });
-      }
-
-      await ctx.answerCallbackQuery({ text: `خرید انجام شد: ${item.name}`, show_alert: true });
-      return ctx.editMessageText(`تجهیزات [ ${item.name} ] خریداری شد و به انبار اضافه گردید. ⚔️`);
-    }
-
-    // تایید انتقال
-    if (data.startsWith("confirm_transfer_")) {
-      const [, , targetIdStr, amountStr] = data.split("_");
-      const targetId = parseInt(targetIdStr);
-      const amount = parseInt(amountStr);
-
-      if ((user.marks || 0) < amount) {
-        return ctx.answerCallbackQuery({ text: "موجودی کافی نیست!", show_alert: true });
-      }
-
-      const { data: target } = await supabase.from("users").select("*").eq("user_id", targetId).maybeSingle();
-      if (!target) return ctx.editMessageText("کاربر مقصد یافت نشد.");
-
-      await supabase.from("users").update({ marks: user.marks - amount }).eq("user_id", user.user_id);
-      await supabase.from("users").update({ marks: (target.marks || 0) + amount }).eq("user_id", targetId);
-
-      try {
-        await pishvabot.api.sendMessage(user.user_id, `💸 شما مبلغ ${amount} مارک به ${target.first_name} منتقل کردید.`);
-        await pishvabot.api.sendMessage(targetId, `🎁 شما مبلغ ${amount} مارک از طرف ${user.first_name} دریافت کردید.`);
-      } catch (e) {}
-
-      await ctx.answerCallbackQuery("انتقال انجام شد.");
-      return ctx.editMessageText(`تراکنش تایید شد: ${amount} مارک به ${target.first_name} منتقل گردید. 🟢`);
-    }
-
-    // حمله به بانک
-    if (data === "confirm_rob_bank") {
-      const now = new Date();
-      if (user.last_bank_rob_at && (now - new Date(user.last_bank_rob_at)) / 1000 < 3600) {
-        return ctx.answerCallbackQuery({ text: "تا دزدی بعدی از بانک باید ۱ ساعت صبر کنید! ⏱", show_alert: true });
-      }
-
-      const { power, hp } = await getStats(user.user_id);
-      const banks = [1000, 3000, 6000, 9000, 10000, 17000, 20000, 22000];
-      const bankVal = banks[Math.floor(Math.random() * banks.length)];
-
-      let profitRatio = 0.1;
-      if (hp >= 100 && hp <= 400 && power >= 50 && power <= 200) profitRatio = 1.5 * 0.3;
-      else if (hp > 400 && power > 200) profitRatio = 3.5 * 0.25;
-
-      const profit = Math.floor(bankVal * profitRatio);
-
-      await supabase.from("users").update({
-        marks: (user.marks || 0) + profit,
-        attack_count: (user.attack_count || 0) + 1,
-        last_bank_rob_at: now.toISOString()
-      }).eq("user_id", user.user_id);
-
-      await ctx.answerCallbackQuery("حمله انجام شد!");
-      return ctx.editMessageText(`💣 **نتیجه عملیات حمله به بانک (${bankVal} مارکی):**\n\nتیم شما موفق شد غنیمتی معادل ${profit} مارک استخراج کند! 💰`);
-    }
-
-    // دزدی از سرباز
-    if (data === "confirm_rob_user") {
-      const now = new Date();
-      if (user.last_user_rob_at && (now - new Date(user.last_user_rob_at)) / 1000 < 600) {
-        return ctx.answerCallbackQuery({ text: "برای دزدی بعدی از سرباز ۱۰ دقیقه صبر کنید! ⏱", show_alert: true });
-      }
-
-      const { data: targets } = await supabase.from("users").select("*").neq("user_id", user.user_id).limit(10);
-      if (!targets || targets.length === 0) {
-        return ctx.editMessageText("هیچ سربازی برای حمله در محدوده پیدا نشد! 🤷‍♂️");
-      }
-
-      const opponent = targets[Math.floor(Math.random() * targets.length)];
-      const myStats = await getStats(user.user_id);
-      const opStats = await getStats(opponent.user_id);
-
-      const myScore = myStats.power + myStats.hp;
-      const opScore = opStats.power + opStats.hp;
-
-      let isWin = myScore >= opScore;
-      let reward = isWin ? Math.floor(myScore * 0.02) : Math.floor(myScore * 0.011);
-
-      await supabase.from("users").update({
-        marks: (user.marks || 0) + reward,
-        attack_count: (user.attack_count || 0) + 1,
-        last_user_rob_at: now.toISOString()
-      }).eq("user_id", user.user_id);
-
-      try {
-        await pishvabot.api.sendMessage(opponent.user_id, `⚠️ **هشدار امنیتی:**\nسرباز ${user.first_name} به شما شبیخون زد!\nنتیجه نبرد: ${isWin ? "شکست شما" : "دفاع موفق"}`);
-      } catch (e) {}
-
-      await ctx.answerCallbackQuery("نبرد به پایان رسید.");
-      return ctx.editMessageText(`⚔️ **نتیجه نبرد با ${opponent.first_name}:**\n\nوضعیت: ${isWin ? "پیروزی 🏆" : "شکست 💔"}\nسود حاصله: ${reward} مارک`);
-    }
-
-    // سود گرفتن از رایشس بانک
-    if (data === "bank_claim_profit") {
-      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
-      const rBalance = bankData?.reichs_balance || 0;
-
-      if (rBalance === 0) {
-        return ctx.answerCallbackQuery({ text: "هیچ مارکی در رایشس بانک سرمایه‌گذاری نشده است!", show_alert: true });
-      }
-
-      const now = new Date();
-      const lastClaim = new Date(bankData?.last_interest_claim || now);
-      const hours = Math.floor((now - lastClaim) / (1000 * 60 * 60));
-
-      if (hours < 1) {
-        return ctx.answerCallbackQuery({ text: "هنوز ۱ ساعت از آخرین دریافت سود نگذشته است!", show_alert: true });
-      }
-
-      let baseRate = 0.1;
-      if (rBalance > 10000) baseRate = 0.4;
-      else if (rBalance > 6000) baseRate = 0.35;
-      else if (rBalance > 2000) baseRate = 0.3;
-
-      const multipliers = { 0: 1, 1: 1.7, 2: 2.3, 3: 2.8, 4: 3.5, 5: 4, 6: 5 };
-      const levelMult = multipliers[bankData?.reichs_level || 0] || 1;
-
-      const profitPerHour = (rBalance / 100) * baseRate * levelMult;
-      const totalProfit = Math.floor(profitPerHour * hours);
-
-      await supabase.from("users").update({ marks: (user.marks || 0) + totalProfit }).eq("user_id", user.user_id);
-      await supabase.from("bank").update({ last_interest_claim: now.toISOString() }).eq("user_id", user.user_id);
-
-      await ctx.answerCallbackQuery("سود واریز شد!");
-      return ctx.editMessageText(`🏛 **خوش آمدید به رایشس بانک!**\n\nتعداد ساعت محاسبه‌شده: ${hours} ساعت\nسود واریزی به حساب: ${totalProfit} مارک 💵`);
-    }
-
-    // ارتقای رایشس بانک
-    if (data === "bank_upgrade") {
-      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
-      const rBalance = bankData?.reichs_balance || 0;
-
-      if (rBalance < 6000) {
-        return ctx.answerCallbackQuery({ text: "برای ارتقای رایشس بانک باید حداقل 6000 مارک در آن سپرده داشته باشید!", show_alert: true });
-      }
-
-      const curLvl = bankData?.reichs_level || 0;
-      const upgradeCosts = { 0: 2500, 1: 3200, 2: 4000, 3: 5200, 4: 6000, 5: 13000 };
-
-      if (curLvl >= 6) {
-        return ctx.answerCallbackQuery({ text: "رایشس بانک شما در سطح نهایی (۶) قرار دارد!", show_alert: true });
-      }
-
-      const cost = upgradeCosts[curLvl];
-      if ((user.marks || 0) < cost) {
-        return ctx.answerCallbackQuery({ text: `موجودی کافی نیست! هزینه ارتقا: ${cost} مارک`, show_alert: true });
-      }
-
-      await supabase.from("users").update({ marks: user.marks - cost }).eq("user_id", user.user_id);
-      await supabase.from("bank").update({ reichs_level: curLvl + 1 }).eq("user_id", user.user_id);
-
-      await ctx.answerCallbackQuery("ارتقا انجام شد!");
-      return ctx.editMessageText(`⚡️ رایشس بانک شما با موفقیت به سطح ${curLvl + 1} ارتقا یافت.`);
-    }
-
-    // خرید/ارتقای تفنگ شکاری
-    if (data.startsWith("confirm_buy_gun_")) {
-      const [, , , lvlStr, costStr] = data.split("_");
-      const targetLvl = parseInt(lvlStr);
-      const cost = parseInt(costStr);
-
-      if ((user.marks || 0) < cost) {
-        return ctx.answerCallbackQuery({ text: "موجودی مارک کافی نیست!", show_alert: true });
-      }
-
-      await supabase.from("users").update({ marks: user.marks - cost }).eq("user_id", user.user_id);
-      await supabase.from("hunting").update({ gun_level: targetLvl }).eq("user_id", user.user_id);
-
-      await ctx.answerCallbackQuery("تفنگ ارتقا یافت!");
-      return ctx.editMessageText(`🎯 تفنگ شکاری شما با موفقیت به سطح ${targetLvl} ارتقا یافت.`);
-    }
-
-    // راهنمای فروش قفس
-    if (data === "sell_hunting_prompt") {
-      await ctx.answerCallbackQuery();
-      return ctx.reply(`برای فروش شکارها، دستور را به این شکل بفرستید:\n\n` + "`فروش 6 دورگه`", { parse_mode: "Markdown" });
-    }
-
-  } catch (e) {
-    console.error("Callback Query Error:", e);
-  }
-});
-
-// صادر کردن هاندر مخصو ص Cloudflare Workers
+// ------------------- WORKER ENTRY POINT -------------------
 export default {
-  async fetch(request, env, ctx) {
-    if (request.method === "POST") {
-      return webhookCallback(pishvabot, "cloudflare-mod")(request);
+    async fetch(request, env) {
+        if (request.method !== 'POST') return new Response('PishvaBot Active!', { status: 200 });
+        
+        const token = env.BOT_TOKEN;
+        try {
+            const update = await request.json();
+            
+            if (update.message) {
+                await handleMessage(token, update.message);
+            } else if (update.callback_query) {
+                await handleCallback(token, update.callback_query);
+            }
+        } catch (err) {
+            console.error("Worker Error:", err);
+        }
+        return new Response('OK', { status: 200 });
     }
-    return new Response("pishvabot is running successfully!");
-  }
 };
+
+// ------------------- MESSAGE HANDLER -------------------
+async function handleMessage(token, msg) {
+    if (!msg.from || msg.from.is_bot) return;
+
+    const user = await getOrCreateUser(msg.from);
+    const chatId = msg.chat.id;
+    const text = (msg.text || '').trim();
+    const replyMsgId = msg.message_id;
+
+    // 1. مجازات برای کلمات ممنوعه
+    if (['سلام', 'های', 'هلو'].includes(text.toLowerCase())) {
+        let fine = 120;
+        if (user.level === 2) fine = 130;
+        if (user.level === 3) fine = 140;
+        if (user.level === 4) fine = 4000;
+        if (user.level >= 5) fine = 5000;
+
+        const newMarks = Math.max(0, user.marks - fine);
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ marks: newMarks, total_punishments: user.total_punishments + 1 })
+        });
+
+        const replyText = `${getTitle(user.level)}\n\n⚠️ **تخلف نظامی!** استفاده از کلمات سوسول‌بازی (سلام/های/هلو) قدغن است!\n💥 **جریمه:** ${fine} مارک از حسابت کسر شد.\n🔥 جدی باش سرباز!`;
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: replyText, reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+    }
+
+    // 2. دستور درود (جایزه)
+    if (text === 'درود') {
+        const cooldowns = { 1: 30, 2: 30, 3: 60, 4: 150, 5: 120, 6: 120 };
+        const cdSec = cooldowns[user.level];
+
+        if (user.last_dorood) {
+            const diffSec = (new Date() - new Date(user.last_dorood)) / 1000;
+            if (diffSec < cdSec) {
+                const rem = Math.ceil(cdSec - diffSec);
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: `🛑 **صبر کن سرباز!** تا درود بعدی باید **${rem} ثانیه** دیگه صبر کنی! 🗿`,
+                    reply_to_message_id: replyMsgId,
+                    parse_mode: 'Markdown'
+                });
+            }
+        }
+
+        let reward = 0;
+        if (user.level === 1) reward = getRandomInt(50, 120);
+        else if (user.level === 2) reward = getRandomInt(120, 130);
+        else if (user.level === 3) reward = getRandomInt(130, 140);
+        else if (user.level === 4) reward = getRandomInt(250, 320);
+        else if (user.level === 5) reward = getRandomInt(420, 500);
+        else if (user.level === 6) reward = 1000;
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks + reward,
+                last_dorood: new Date().toISOString(),
+                total_doroods: user.total_doroods + 1
+            })
+        });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🫡 **درود بر پیشوا!**\n🎖 پاداش دریافت شد: **+${reward} مارک**\n💰 کل دارایی: **${user.marks + reward} مارک**`,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'Markdown'
+        });
+    }
+
+    // 3. راهنما
+    if (text === 'راهنما') {
+        const helpText = `⚔️ **راهنمای پایگاه نظامی پیشوا بات** ⚔️\n\n` +
+            `🎖 **درود:** دریافت مارک رایگان (همراه با تایمر cooldown)\n` +
+            `📊 **آمار / آمارش:** مشاهده اطلاعات خود یا کاربر ریپلای شده\n` +
+            `🛒 **بازار سیاه:** خرید سلاح و جلیقه‌های زرهی\n` +
+            `🏦 **بانک / دزدی از بانک:** مدیریت حساب یا عملیات سرقت مسلحانه\n` +
+            `⚔️ **دزدی از سرباز:** مبارزه و غارت سربازان دیگر\n` +
+            `💸 **انتقال [مقدار]:** انتقال مارک به سایر افراد (روی پیام ریپلای کنید)\n` +
+            `🦅 **شکار / قفس:** شکار با تفنگ شکاری و فروش در قفس\n` +
+            `⚠️ **هشدار:** کلمات سوسول‌بازی (سلام/های) جریمه مارک دارند!`;
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: helpText, reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+    }
+
+    // 4. دریافت آمار
+    if (text === 'آمار' || text === 'امار' || text === 'آمارش' || text === 'امارش' || text.startsWith('آمار @') || text.startsWith('امار @')) {
+        let targetUser = user;
+
+        if (msg.reply_to_message) {
+            targetUser = await getOrCreateUser(msg.reply_to_message.from);
+        } else if (text.includes('@')) {
+            const parts = text.split('@');
+            if (parts[1]) {
+                const found = await getUserByUsername(parts[1].trim());
+                if (found) targetUser = found;
+                else return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ کاربر مورد نظر پیدا نشد!', reply_to_message_id: replyMsgId });
+            }
+        }
+
+        const inv = await dbFetch(`user_inventory?user_id=eq.${targetUser.user_id}`);
+        let power = 0, health = 0;
+        inv.forEach(i => {
+            if (WEAPONS[i.item_name]) power += WEAPONS[i.item_name].damage * i.quantity;
+            if (ARMORS[i.item_name]) health += ARMORS[i.item_name].health * i.quantity;
+        });
+
+        const statsText = `📊 **شناسنامه نظامی سرباز:**\n\n` +
+            `👤 **نام:** ${targetUser.first_name}\n` +
+            `🎖 **درجه:** ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
+            `💰 **موجودی (مارک):** ${targetUser.marks}\n` +
+            `🏦 **موجودی بانک:** ${targetUser.bank_balance}\n` +
+            `⚔️ **قدرت حمله:** ${power} HP\n` +
+            `🛡 **قدرت دفاع (خون):** ${health} HP\n` +
+            `🦅 **سطح تفنگ شکاری:** ${targetUser.hunting_rifle_level}\n` +
+            `🫡 **تعداد درودها:** ${targetUser.total_doroods}\n` +
+            `💥 **تعداد جریمه‌ها:** ${targetUser.total_punishments}\n` +
+            `⚔️ **تعداد نبردها:** ${targetUser.total_attacks}`;
+
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+    }
+
+    // 5. انتقال توکن
+    if (text.startsWith('انتقال')) {
+        let amount = 0;
+        let targetUser = null;
+
+        if (msg.reply_to_message) {
+            amount = parseInt(text.replace('انتقال', '').trim());
+            targetUser = await getOrCreateUser(msg.reply_to_message.from);
+        } else if (text.includes('@')) {
+            const parts = text.split(' ');
+            amount = parseInt(parts[1]);
+            if (parts[2]) targetUser = await getUserByUsername(parts[2]);
+        }
+
+        if (isNaN(amount) || amount <= 0 || !targetUser) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **فرمت اشتباه!** نمونه: `انتقال 500` روی پیام کاربر یا `انتقال 500 @ali`', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+        }
+
+        if (user.user_id === targetUser.user_id) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ نمیتونی به خودت مارک منتقل کنی!', reply_to_message_id: replyMsgId });
+        }
+
+        if (user.marks < amount) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **موجودی ناکافی!** این‌قدر مارک نداری!', reply_to_message_id: replyMsgId });
+        }
+
+        // تاییدیه قبل از انجام
+        const keyboard = {
+            inline_keyboard: [[
+                { text: '✅ تایید و ارسال', callback_data: `confirm_transfer:${targetUser.user_id}:${amount}` },
+                { text: '❌ لغو', callback_data: 'cancel' }
+            ]]
+        };
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⚠️ **تاییدیه نظامی انتقال:**\nآیا مطمئن هستید که می‌خواهید **${amount} مارک** به کاربر **${targetUser.first_name}** منتقل کنید؟`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard
+        });
+    }
+
+    // 6. بازار سیاه
+    if (text === 'بازار سیاه') {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '🔪 بخش سلاح‌ها', callback_data: 'bm_weapons' }, { text: '🛡 بخش لباس و زره', callback_data: 'bm_armors' }],
+                [{ text: '🦅 تفنگ شکاری', callback_data: 'bm_rifle' }]
+            ]
+        };
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `💀 **به بازار سیاه کاپو خوش آمدید!**\nاینجا قوانین دولتی معنا ندارد. فقط مارک‌های شما ارزش دارد. چه چیزی نیاز داری سرباز؟`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard
+        });
+    }
+
+    // 7. تفنگ شکاری
+    if (text === 'تفنگ شکاری') {
+        const nextLvl = user.hunting_rifle_level + 1;
+        if (nextLvl > 6) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '🦅 تفنگ شکاری شما در حداکثر سطح (سطح ۶) قرار دارد!', reply_to_message_id: replyMsgId });
+        }
+        const cost = RIFLE_LEVELS[nextLvl];
+        const keyboard = {
+            inline_keyboard: [[
+                { text: `✅ ارتقا به سطح ${nextLvl} (${cost} مارک)`, callback_data: `buy_rifle:${nextLvl}:${cost}` },
+                { text: '❌ لغو', callback_data: 'cancel' }
+            ]]
+        };
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🦅 **ارتقای تفنگ شکاری:**\nسطح فعلی: **${user.hunting_rifle_level}**\nهزینه ارتقا به سطح **${nextLvl}**: **${cost} مارک**\nآیا تایید می‌کنید؟`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard
+        });
+    }
+
+    // 8. دزدی از بانک
+    if (text === 'دزدی از بانک') {
+        if (user.last_bank_heist) {
+            const diffMin = (new Date() - new Date(user.last_bank_heist)) / (1000 * 60);
+            if (diffMin < 60) {
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🛑 **پلیس‌ها مشکوک شده‌اند!** باید **${Math.ceil(60 - diffMin)} دقیقه** دیگر برای سرقت بعدی صبر کنی!`, reply_to_message_id: replyMsgId });
+            }
+        }
+
+        const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}`);
+        let power = 0, health = 0;
+        inv.forEach(i => {
+            if (WEAPONS[i.item_name]) power += WEAPONS[i.item_name].damage * i.quantity;
+            if (ARMORS[i.item_name]) health += ARMORS[i.item_name].health * i.quantity;
+        });
+
+        const keyboard = {
+            inline_keyboard: [[
+                { text: '💥 حمله به بانک!', callback_data: 'confirm_bank_heist' },
+                { text: '❌ عقب‌نشینی', callback_data: 'cancel' }
+            ]]
+        };
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🏦 **بررسی عملیات سرقت از بانک:**\n\n⚔️ قدرت ضربه سلاح‌ها: **${power} HP**\n🛡 میزان خون و جلیقه: **${health} HP**\n\n⚠️ آیا از حمله مسلحانه به خزانه بانک مطمئن هستید؟`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard
+        });
+    }
+
+    // 9. دزدی از سرباز
+    if (text === 'دزدی از سرباز') {
+        if (user.last_soldier_attack) {
+            const diffMin = (new Date() - new Date(user.last_soldier_attack)) / (1000 * 60);
+            if (diffMin < 10) {
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🛑 **شناسایی شده‌ای!** برای حمله بعدی به سربازان **${Math.ceil(10 - diffMin)} دقیقه** صبر کن!`, reply_to_message_id: replyMsgId });
+            }
+        }
+
+        const keyboard = {
+            inline_keyboard: [[
+                { text: '⚔️ جستجو و حمله به سرباز', callback_data: 'confirm_soldier_attack' },
+                { text: '❌ انصراف', callback_data: 'cancel' }
+            ]]
+        };
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⚔️ **عملیات درگیری شهری:**\nآیا می‌خواهید به نزدیک‌ترین سرباز شناسایی‌شده در منطقه حمله کنید؟`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard
+        });
+    }
+
+    // 10. بانک شخصی و رایشس بانک
+    if (text === 'بانک') {
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: '💎 سود گرفتن از رایشس بانک', callback_data: 'reichsbank_menu' }],
+                [{ text: '📈 ارتقای رایشس بانک', callback_data: 'upgrade_reichsbank' }]
+            ]
+        };
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🏛 **بانک مرکزی و شخصی:**\n\n💰 موجودی کیف پول: **${user.marks} مارک**\n🏦 موجودی بانک: **${user.bank_balance} مارک**\n🎖 سطح رایشس بانک: **${user.reichsbank_level}**`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard
+        });
+    }
+
+    // 11. شکار کردن
+    if (text === 'شکار') {
+        if (user.hunting_rifle_level === 0) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ برای شکار ابتدا باید تفنگ شکاری بخرید! (ارسال کلمه: `تفنگ شکاری`)', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+        }
+
+        const rand = Math.random() * 100;
+        let hunted = '';
+
+        if (user.hunting_rifle_level === 1) hunted = 'دورگه';
+        else if (user.hunting_rifle_level === 2) hunted = rand <= 10 ? 'دورگه' : 'غیر اصیل';
+        else if (user.hunting_rifle_level === 3) {
+            if (rand <= 2) hunted = 'دورگه';
+            else if (rand <= 10) hunted = 'غیر اصیل';
+            else hunted = 'انگل';
+        } else if (user.hunting_rifle_level === 4) {
+            if (rand <= 1) hunted = 'دورگه';
+            else if (rand <= 3) hunted = 'غیر اصیل';
+            else if (rand <= 6) hunted = 'انگل';
+            else hunted = 'مفت خور';
+        } else if (user.hunting_rifle_level === 5) {
+            hunted = rand <= 5 ? 'مفت خور' : 'آفت';
+        } else if (user.hunting_rifle_level === 6) {
+            hunted = rand <= 30 ? 'آفت' : 'حشرات موذی';
+        }
+
+        // اضافه به قفس
+        const existing = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${hunted}`);
+        if (existing.length > 0) {
+            await dbFetch(`user_inventory?id=eq.${existing[0].id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ quantity: existing[0].quantity + 1 })
+            });
+        } else {
+            await dbFetch(`user_inventory`, {
+                method: 'POST',
+                body: JSON.stringify({ user_id: user.user_id, item_type: 'trophy', item_name: hunted, quantity: 1 })
+            });
+        }
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🦅 **شکار موفقیت‌آمیز!**\nشما موفق شدید یک **«${hunted}»** شکار کنید. صید شما به قفس منتقل شد.`,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'Markdown'
+        });
+    }
+
+    // 12. قفس شکار
+    if (text === 'قفس') {
+        const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_type=eq.trophy`);
+        let totalValue = 0;
+        let listText = "🪵 **محتویات قفس شکار شما:**\n\n";
+
+        inv.forEach(i => {
+            const val = (TROPHIES[i.item_name] || 0) * i.quantity;
+            totalValue += val;
+            listText += `• **${i.item_name}**: ${i.quantity} عدد (ارزش هر کدام: ${TROPHIES[i.item_name]} | کل: ${val})\n`;
+        });
+
+        listText += `\n💵 **ارزش کل صیدها:** **${totalValue} مارک**`;
+
+        const keyboard = {
+            inline_keyboard: [[{ text: '💰 فروش شکار', callback_data: 'sell_trophies_prompt' }]]
+        };
+
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: listText, reply_to_message_id: replyMsgId, reply_markup: keyboard, parse_mode: 'Markdown' });
+    }
+
+    // 13. دستور فروش دستوری (مثلاً: فروش 6 دورگه)
+    if (text.startsWith('فروش ')) {
+        const parts = text.split(' ');
+        if (parts.length >= 3) {
+            const count = parseInt(parts[1]);
+            const trophyName = parts.slice(2).join(' ').trim();
+
+            if (!isNaN(count) && count > 0 && TROPHIES[trophyName]) {
+                const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${trophyName}`);
+                if (inv.length > 0 && inv[0].quantity >= count) {
+                    const earned = count * TROPHIES[trophyName];
+                    const newQty = inv[0].quantity - count;
+
+                    if (newQty > 0) {
+                        await dbFetch(`user_inventory?id=eq.${inv[0].id}`, { method: 'PATCH', body: JSON.stringify({ quantity: newQty }) });
+                    } else {
+                        await dbFetch(`user_inventory?id=eq.${inv[0].id}`, { method: 'DELETE' });
+                    }
+
+                    await dbFetch(`users?user_id=eq.${user.user_id}`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ marks: user.marks + earned })
+                    });
+
+                    return sendTg(token, 'sendMessage', {
+                        chat_id: chatId,
+                        text: `✅ **فروش با موفقیت انجام شد!**\nتعداد **${count}** عدد **${trophyName}** فروخته شد.\n💰 دریافت شد: **+${earned} مارک**`,
+                        reply_to_message_id: replyMsgId,
+                        parse_mode: 'Markdown'
+                    });
+                } else {
+                    return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ این تعداد از این نوع شکار در قفس ندارید!', reply_to_message_id: replyMsgId });
+                }
+            }
+        }
+    }
+}
+
+// ------------------- CALLBACK QUERY HANDLER (دکمه‌های شیشه‌ای) -------------------
+async function handleCallback(token, cb) {
+    const user = await getOrCreateUser(cb.from);
+    const chatId = cb.message.chat.id;
+    const data = cb.data;
+
+    if (data === 'cancel') {
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '❌ **عملیات توسط کاربر لغو شد.**' });
+    }
+
+    // تایید انتقال مارک
+    if (data.startsWith('confirm_transfer:')) {
+        const [, targetId, amountStr] = data.split(':');
+        const amount = parseInt(amountStr);
+        const target = await dbFetch(`users?user_id=eq.${targetId}`);
+
+        if (target.length === 0 || user.marks < amount) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: 'خطا در انجام معامله!', show_alert: true });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - amount }) });
+        await dbFetch(`users?user_id=eq.${targetId}`, { method: 'PATCH', body: JSON.stringify({ marks: target[0].marks + amount }) });
+
+        sendTg(token, 'sendMessage', {
+            chat_id: targetId,
+            text: `📩 **اعلان واریزی:**\nکاربر **${user.first_name}** مقدار **${amount} مارک** به حساب شما واریز کرد.`
+        });
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `✅ **انتقال موفقیت‌آمیز!**\nمقدار **${amount} مارک** با موفقیت به **${target[0].first_name}** منتقل شد.`
+        });
+    }
+
+    // بازار سیاه - لیست سلاح‌ها
+    if (data === 'bm_weapons') {
+        let text = "🔪 **لیست سلاح‌های بازار سیاه:**\n\n";
+        const buttons = [];
+        Object.keys(WEAPONS).forEach(w => {
+            text += `• **${w}**: ${WEAPONS[w].price} مارک (${WEAPONS[w].damage} HP)\n`;
+            buttons.push([{ text: `خرید ${w} (${WEAPONS[w].price} مارک)`, callback_data: `buy_item:weapon:${w}` }]);
+        });
+        buttons.push([{ text: 'بازگشت', callback_data: 'cancel' }]);
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text, reply_markup: { inline_keyboard: buttons }, parse_mode: 'Markdown' });
+    }
+
+    // بازار سیاه - لیست جلیقه‌ها
+    if (data === 'bm_armors') {
+        let text = "🛡 **لیست لباس و زره‌های بازار سیاه:**\n\n";
+        const buttons = [];
+        Object.keys(ARMORS).forEach(a => {
+            text += `• **${a}**: ${ARMORS[a].price} مارک (+${ARMORS[a].health} HP)\n`;
+            buttons.push([{ text: `خرید ${a} (${ARMORS[a].price} مارک)`, callback_data: `buy_item:armor:${a}` }]);
+        });
+        buttons.push([{ text: 'بازگشت', callback_data: 'cancel' }]);
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text, reply_markup: { inline_keyboard: buttons }, parse_mode: 'Markdown' });
+    }
+
+    // خرید آیتم سلاح / زره
+    if (data.startsWith('buy_item:')) {
+        const [, type, name] = data.split(':');
+        const item = type === 'weapon' ? WEAPONS[name] : ARMORS[name];
+
+        if (user.marks < item.price) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ مارک کافی نداری سرباز!', show_alert: true });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - item.price }) });
+
+        const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${name}`);
+        if (inv.length > 0) {
+            await dbFetch(`user_inventory?id=eq.${inv[0].id}`, { method: 'PATCH', body: JSON.stringify({ quantity: inv[0].quantity + 1 }) });
+        } else {
+            await dbFetch(`user_inventory`, { method: 'POST', body: JSON.stringify({ user_id: user.user_id, item_type: type, item_name: name, quantity: 1 }) });
+        }
+
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `✅ آیتم **«${name}»** با موفقیت خریداری و به تجهیزات شما اضافه شد.` });
+    }
+
+    // ارتقای تفنگ شکاری
+    if (data.startsWith('buy_rifle:')) {
+        const [, lvlStr, costStr] = data.split(':');
+        const targetLvl = parseInt(lvlStr);
+        const cost = parseInt(costStr);
+
+        if (user.marks < cost) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ موجودی کافی نیست!', show_alert: true });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ marks: user.marks - cost, hunting_rifle_level: targetLvl })
+        });
+
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `✅ تفنگ شکاری شما با موفقیت به **سطح ${targetLvl}** ارتقا یافت.` });
+    }
+
+    // انجام عملیات حمله به بانک
+    if (data === 'confirm_bank_heist') {
+        const banks = [1000, 3000, 6000, 9000, 10000, 17000, 20000, 22000];
+        const bankVault = banks[Math.floor(Math.random() * banks.length)];
+
+        const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}`);
+        let power = 0, health = 0;
+        inv.forEach(i => {
+            if (WEAPONS[i.item_name]) power += WEAPONS[i.item_name].damage * i.quantity;
+            if (ARMORS[i.item_name]) health += ARMORS[i.item_name].health * i.quantity;
+        });
+
+        let lossRatio = 0.7;
+        let profitMult = 1.5;
+
+        if (health > 400 && power > 200) {
+            lossRatio = 0.75;
+            profitMult = 3.5;
+        }
+
+        const totalEquipVal = inv.reduce((sum, i) => {
+            const p = WEAPONS[i.item_name]?.price || ARMORS[i.item_name]?.price || 0;
+            return sum + (p * i.quantity);
+        }, 0);
+
+        const lostVal = Math.floor(totalEquipVal * lossRatio);
+        const netProfit = Math.floor(lostVal * profitMult);
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks + netProfit,
+                last_bank_heist: new Date().toISOString(),
+                total_attacks: user.total_attacks + 1
+            })
+        });
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `💥 **نتیجه حمله به بانک (خزانه: ${bankVault} مارک):**\n\n📉 تجهیزات آسیب‌دیده: **${lostVal} مارک**\n💵 غنیمت خالص به‌دست‌آمده: **+${netProfit} مارک**\n💰 کل دارایی جدید: **${user.marks + netProfit} مارک**`
+        });
+    }
+
+    // انجام حمله به سرباز
+    if (data === 'confirm_soldier_attack') {
+        const opponents = await dbFetch(`users?user_id=neq.${user.user_id}&limit=10`);
+        if (opponents.length === 0) {
+            return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '❌ هیچ سربازی در منطقه جهت درگیری یافت نشد!' });
+        }
+
+        const target = opponents[Math.floor(Math.random() * opponents.length)];
+
+        const uInv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}`);
+        const tInv = await dbFetch(`user_inventory?user_id=eq.${target.user_id}`);
+
+        let uPower = 100, tPower = 100;
+        uInv.forEach(i => { if (WEAPONS[i.item_name]) uPower += WEAPONS[i.item_name].damage; });
+        tInv.forEach(i => { if (WEAPONS[i.item_name]) tPower += WEAPONS[i.item_name].damage; });
+
+        let isWinner = uPower >= tPower;
+        let gain = isWinner ? Math.floor(uPower * 0.02) : Math.floor(uPower * 0.011);
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks + gain,
+                last_soldier_attack: new Date().toISOString(),
+                total_attacks: user.total_attacks + 1
+            })
+        });
+
+        // ارسال پیام به قربانی
+        sendTg(token, 'sendMessage', {
+            chat_id: target.user_id,
+            text: `⚠️ **اعلا‌ن جنگ!**\nسرباز **${user.first_name}** به شما حمله کرد!\nنتیجه درگیری: شما فرار کردید و خسارت جزئی دیدید.`
+        });
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `⚔️ **نتیجه نبرد با ${target.first_name}:**\n${isWinner ? '🎉 پیروز شدید!' : '💔 شکست خوردید اما غنیمت جمع کردید!'}\n💰 سود شما از درگیری: **+${gain} مارک**`
+        });
+    }
+
+    // رایشس بانک - سود و برداشت
+    if (data === 'reichsbank_menu') {
+        const now = new Date();
+        const last = new Date(user.last_reichsbank_claim || now);
+        const hours = Math.floor((now - last) / (1000 * 60 * 60));
+
+        let baseRate = 0.1;
+        if (user.bank_balance > 10000) baseRate = 0.4;
+        else if (user.bank_balance > 6000) baseRate = 0.35;
+        else if (user.bank_balance > 2000) baseRate = 0.3;
+
+        const multipliers = { 0: 1, 1: 1.7, 2: 2.3, 3: 2.8, 4: 3.5, 5: 4, 6: 5 };
+        const rate = baseRate * multipliers[user.reichsbank_level];
+        const profit = Math.floor((user.bank_balance / 100) * rate * hours);
+
+        if (profit > 0) {
+            await dbFetch(`users?user_id=eq.${user.user_id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({
+                    marks: user.marks + profit,
+                    last_reichsbank_claim: now.toISOString()
+                })
+            });
+        }
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `🏛 **به رایشس بانک خوش آمدید!**\n\nسرمایه شما در رایشس بانک: **${user.bank_balance} مارک**\nسود ساعتی فعال: **${rate}%**\nسود تعلق گرفته (${hours} ساعت): **+${profit} مارک**\n\nمبلغ سود به کیف پول اصلی شما اضافه شد.`
+        });
+    }
+
+    // ارتقای سطح رایشس بانک
+    if (data === 'upgrade_reichsbank') {
+        if (user.bank_balance < 6000) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ برای ارتقای رایشس بانک باید حداقل ۶۰۰۰ مارک در بانک داشته باشید!', show_alert: true });
+        }
+
+        const costs = { 0: 2500, 1: 3200, 2: 4000, 3: 5200, 4: 6000, 5: 13000 };
+        const nextLvl = user.reichsbank_level + 1;
+
+        if (nextLvl > 6) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: 'رایشس بانک شما در حداکثر سطح قرار دارد!', show_alert: true });
+        }
+
+        const cost = costs[user.reichsbank_level];
+        if (user.marks < cost) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: `❌ مارک کافی در کیف پول شخصی نداری! هزینه: ${cost} مارک`, show_alert: true });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks - cost,
+                reichsbank_level: nextLvl
+            })
+        });
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `✅ **رایشس بانک ارتقا یافت!**\nسطح جدید: **سطح ${nextLvl}**\nضریب سود ساعتی جدید شما فعال شد.`
+        });
+    }
+
+    // فروش شکار از طریق راهنما
+    if (data === 'sell_trophies_prompt') {
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `💰 **راهنمای فروش شکار:**\nبرای فروش صیدهای خود کلمه زیر را ارسال کنید:\n\n` +
+                `` + `فروش [تعداد] [نام شکار]` + `` + `\n\nمثال:\n` + `فروش 6 دورگه`
+        });
+    }
+}
+ 
