@@ -303,6 +303,67 @@ pishvabot.on("message:text", async (ctx) => {
       });
     }
 
+        // ۸.۵. واریز به رایشس بانک (مثال: واریز به بانک 1000)
+    if (cleanText.startsWith("واریزبهبانک")) {
+      const parts = rawText.split(" ");
+      const amount = parseInt(parts[1]);
+
+      if (isNaN(amount) || amount <= 0) {
+        return ctx.reply(`${tone.prefix}فرمان نامعتبر! فرمت صحیح:\n` + "`واریز به بانک 1000`", {
+          reply_to_message_id: ctx.message.message_id,
+          parse_mode: "Markdown"
+        });
+      }
+
+      if ((user.marks || 0) < amount) {
+        return ctx.reply(`${tone.prefix}موجودی مارک شما کافی نیست! ❌`, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      // دریافت اطلاعات بانک کاربر
+      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
+      const currentBankBalance = bankData?.reichs_balance || 0;
+
+      // کسر از حساب شخصی و افزودن به رایشس بانک
+      await supabase.from("users").update({ marks: user.marks - amount }).eq("user_id", user.user_id);
+      await supabase.from("bank").upsert({
+        user_id: user.user_id,
+        reichs_balance: currentBankBalance + amount,
+        reichs_level: bankData?.reichs_level || 0
+      });
+
+      return ctx.reply(`${tone.prefix}مبلغ ${amount} مارک با موفقیت به رایشس بانک واریز شد. 🏛\nموجودی جدید بانک: ${currentBankBalance + amount} مارک`, {
+        reply_to_message_id: ctx.message.message_id
+      });
+    }
+
+    // ۸.۶. برداشت از رایشس بانک (مثال: برداشت از بانک 1000)
+    if (cleanText.startsWith("برداشتازبانک")) {
+      const parts = rawText.split(" ");
+      const amount = parseInt(parts[1]);
+
+      if (isNaN(amount) || amount <= 0) {
+        return ctx.reply(`${tone.prefix}فرمان نامعتبر! فرمت صحیح:\n` + "`برداشت از بانک 1000`", {
+          reply_to_message_id: ctx.message.message_id,
+          parse_mode: "Markdown"
+        });
+      }
+
+      const { data: bankData } = await supabase.from("bank").select("*").eq("user_id", user.user_id).maybeSingle();
+      const currentBankBalance = bankData?.reichs_balance || 0;
+
+      if (currentBankBalance < amount) {
+        return ctx.reply(`${tone.prefix}موجودی شما در رایشس بانک کافی نیست! ❌`, { reply_to_message_id: ctx.message.message_id });
+      }
+
+      // کسر از رایشس بانک و افزودن به حساب شخصی
+      await supabase.from("bank").update({ reichs_balance: currentBankBalance - amount }).eq("user_id", user.user_id);
+      await supabase.from("users").update({ marks: (user.marks || 0) + amount }).eq("user_id", user.user_id);
+
+      return ctx.reply(`${tone.prefix}مبلغ ${amount} مارک از رایشس بانک برداشت شد و به حساب شخصی شما منتقل گردید. 💵`, {
+        reply_to_message_id: ctx.message.message_id
+      });
+    }
+
     // ۹. تفنگ شکاری
     if (cleanText.includes("تفنگشکاری")) {
       const { data: hData } = await supabase.from("hunting").select("gun_level").eq("user_id", user.user_id).maybeSingle();
