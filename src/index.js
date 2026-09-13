@@ -140,6 +140,27 @@ const RIFLE_LEVELS = {
     6: 30000
 };
 
+// هزینه ارتقای لول‌های رایشس بانک (پرداخت از بانک شخصی)
+const REICHSBANK_UPGRADE_COSTS = {
+    1: 3000,
+    2: 6000,
+    3: 12000,
+    4: 25000,
+    5: 50000,
+    6: 100000
+};
+
+// ضریب سود هر لول رایشس بانک
+const REICHSBANK_MULTIPLIERS = {
+    0: 1,
+    1: 1.7,
+    2: 2.3,
+    3: 2.8,
+    4: 3.5,
+    5: 4,
+    6: 5
+};
+
 // زمان‌های انتظار برای شکار به دقیقه
 const HUNTING_COOLDOWNS = {
     1: 5,
@@ -424,7 +445,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 3. دریافت آمار (به‌روزرسانی شده با رتبه، مجموع مارک و ارجاع لیدربورد به سایت)
+    // 3. دریافت آمار
     if (text === 'آمار' || text === 'امار' || text === 'آمارش' || text === 'امارش' || text.startsWith('آمار @') || text.startsWith('امار @')) {
         let targetUser = user;
 
@@ -458,6 +479,7 @@ async function handleMessage(token, msg) {
             `🎖 <b>مقام نظامی:</b> ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
             `💎 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
             `🏛 <b>سپرده رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
+            `👑 <b>سطح رایشس بانک:</b> <b>سطح ${targetUser.reichsbank_level || 0}</b>⚡️\n` +
             `🔥 <b>مجموع کل مارک‌های دریافتی:</b> <b>${totalCollected}</b> مارک ${MARK_ANIM}\n` +
             `🏆 <b>رتبه در ثروت‌آفرینی:</b> <b>نفر ${rank}#</b> در سراسر رایش 🥇\n\n` +
             `🗡 <b>قدرت تهاجمی:</b> <b>${power}</b> HP 💣\n` +
@@ -548,7 +570,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 6. بازار سیاه (بخش تفنگ شکاری حذف شده)
+    // 6. بازار سیاه
     if (text === 'بازار سیاه') {
         const keyboard = {
             inline_keyboard: [
@@ -566,7 +588,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 7. تفنگ شکاری (خارج از بازار سیاه هنوز قابل ارتقا است)
+    // 7. تفنگ شکاری
     if (text === 'تفنگ شکاری') {
         const nextLvl = (user.hunting_rifle_level || 0) + 1;
         if (nextLvl > 6) {
@@ -626,7 +648,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 9. دزدی از سرباز (دکمه عمومی / شانس تصادفی)
+    // 9. دزدی از سرباز
     if (text === 'دزدی از سرباز') {
         if (user.last_soldier_attack) {
             const diffMin = (new Date() - new Date(user.last_soldier_attack)) / (1000 * 60);
@@ -652,7 +674,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 9.1 حمله هدفمند به آیدی یا ریپلی: "حمله به @username" یا "حمله به" (روی ریپلی)
+    // 9.1 حمله هدفمند به آیدی یا ریپلی
     if (text.startsWith('حمله به')) {
         let targetUser = null;
 
@@ -678,7 +700,6 @@ async function handleMessage(token, msg) {
             return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>نمی‌توانی به خودت حمله کنی!</b> 🤡', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
         }
 
-        // بررسی یکسان بودن لول
         if (user.level !== targetUser.level) {
             return sendTg(token, 'sendMessage', {
                 chat_id: chatId,
@@ -691,7 +712,6 @@ async function handleMessage(token, msg) {
             });
         }
 
-        // بررسی زمان انتظار برای حمله عمومی/مستقیم
         if (user.last_soldier_attack) {
             const diffMin = (new Date() - new Date(user.last_soldier_attack)) / (1000 * 60);
             if (diffMin < 10) {
@@ -699,7 +719,6 @@ async function handleMessage(token, msg) {
             }
         }
 
-        // محاسبه قدرت
         const uInv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}`);
         const tInv = await dbFetch(`user_inventory?user_id=eq.${targetUser.user_id}`);
 
@@ -710,7 +729,6 @@ async function handleMessage(token, msg) {
         let isWinner = uPower >= tPower;
         let gain = isWinner ? Math.floor(uPower * 0.02) : Math.floor(uPower * 0.011);
 
-        // به‌روزرسانی آمار و موجودی (با ثبت مارک کل)
         await addMarksToUser(user, gain);
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
@@ -730,7 +748,6 @@ async function handleMessage(token, msg) {
         const victimNotice = `🚨 <b>هشدار حمله مستقیم!</b> 🚨\n\n` +
             `🥷 <b>سرباز ${user.first_name}</b> به شما حمله کرد و مقدار <b>${gain}</b> مارک ${MARK_ANIM} غنیمت برداشت!`;
 
-        // ارسال پیام اعلان شخصی به پیوی دو طرف
         sendTg(token, 'sendMessage', { chat_id: user.user_id, text: attackerNotice, parse_mode: 'HTML' });
         sendTg(token, 'sendMessage', { chat_id: targetUser.user_id, text: victimNotice, parse_mode: 'HTML' });
 
@@ -747,28 +764,34 @@ async function handleMessage(token, msg) {
 
     // 10. بانک شخصی و رایشس بانک
     if (text === 'بانک') {
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '💎 برداشت سود ساعتی رایشس بانک 🚀', callback_data: 'reichsbank_menu' }],
-                [{ text: '💵 واریز 1000 مارک 📥', callback_data: 'quick_deposit_1000' }, { text: '💵 واریز کل جیب 📥', callback_data: 'quick_deposit_all' }],
-                [{ text: '📈 ارتقای سطح رایشس بانک 👑', callback_data: 'upgrade_reichsbank' }]
-            ]
-        };
+        const canUpgrade = (user.bank_balance || 0) >= 6000;
+        
+        const inline_keyboard = [
+            [{ text: '💎 برداشت سود ساعتی رایشس بانک 🚀', callback_data: 'reichsbank_menu' }],
+            [{ text: '💵 واریز 1000 مارک 📥', callback_data: 'quick_deposit_1000' }, { text: '💵 واریز کل جیب 📥', callback_data: 'quick_deposit_all' }]
+        ];
+
+        // فقط اگر حداقل ۶۰۰۰ مارک در رایشس بانک داشته باشد، دکمه ارتقا نشان داده می‌شود
+        if (canUpgrade) {
+            inline_keyboard.push([{ text: '📈 ارتقای سطح رایشس بانک 👑', callback_data: 'upgrade_reichsbank' }]);
+        }
+
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
             text: `🏛 💎 <b>مدیریت سرمایه و رایشس بانک</b> 💎 🏛\n` +
                 `✨ ────────────────── ✨\n\n` +
                 `💰 موجودی در جیب: <b>${user.marks}</b> مارک ${MARK_ANIM}\n` +
                 `🏛 موجودی در رایشس بانک: <b>${user.bank_balance}</b> مارک ${MARK_ANIM}\n` +
-                `👑 سطح فعلی رایشس بانک: <b>سطح ${user.reichsbank_level}</b>⚡️\n\n` +
+                `👑 سطح فعلی رایشس بانک: <b>سطح ${user.reichsbank_level || 0}</b>⚡️\n` +
+                `${!canUpgrade ? '⚠️ <i>برای آزادسازی دکمه ارتقای رایشس بانک باید حداقل 6000 مارک در رایشس بانک داشته باشید.</i>\n\n' : ''}` +
                 `💡 <i>برای واریز مبالغ خاص می‌توانید دستور <code>واریز به بانک [مقدار]</code> را بفرستید.</i>`,
             reply_to_message_id: replyMsgId,
-            reply_markup: keyboard,
+            reply_markup: { inline_keyboard },
             parse_mode: 'HTML'
         });
     }
 
-    // 11. شکار کردن (همراه با تایمر جدید بر اساس لول تفنگ)
+    // 11. شکار کردن
     if (text === 'شکار') {
         const rifleLvl = user.hunting_rifle_level || 0;
         if (rifleLvl === 0) {
@@ -823,7 +846,6 @@ async function handleMessage(token, msg) {
             });
         }
 
-        // ذخیره زمان آخرین شکار
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
             body: JSON.stringify({ last_hunt: new Date().toISOString() })
@@ -950,7 +972,7 @@ async function handleCallback(token, cb) {
 
         return sendTg(token, 'answerCallbackQuery', {
             callback_query_id: cb.id,
-            text: guideText.replace(/<[^>]*>?/gm, ''), // نمایش به صورت پاپ آپ هشدار یا آلرت
+            text: guideText.replace(/<[^>]*>?/gm, ''),
             show_alert: true
         });
     }
@@ -1153,7 +1175,6 @@ async function handleCallback(token, cb) {
         const victimNotice = `🚨 <b>هشدار سرقت!</b> 🚨\n\n` +
             `🥷 <b>سرباز ${user.first_name}</b> به شما کمین زد و مقدار <b>${gain}</b> مارک ${MARK_ANIM} غنیمت برداشت!`;
 
-        // ارسال پیام پیوی به دو طرف
         sendTg(token, 'sendMessage', { chat_id: user.user_id, text: attackerNotice, parse_mode: 'HTML' });
         sendTg(token, 'sendMessage', { chat_id: target.user_id, text: victimNotice, parse_mode: 'HTML' });
 
@@ -1178,9 +1199,10 @@ async function handleCallback(token, cb) {
         else if (user.bank_balance > 6000) baseRate = 0.35;
         else if (user.bank_balance > 2000) baseRate = 0.3;
 
-        const multipliers = { 0: 1, 1: 1.7, 2: 2.3, 3: 2.8, 4: 3.5, 5: 4, 6: 5 };
-        const rate = baseRate * multipliers[user.reichsbank_level || 0];
-        const profit = Math.floor((user.bank_balance / 100) * rate * hours);
+        const currentLvl = user.reichsbank_level || 0;
+        const multiplier = REICHSBANK_MULTIPLIERS[currentLvl] || 1;
+        const finalRate = baseRate * multiplier;
+        const profit = Math.floor((user.bank_balance / 100) * finalRate * hours);
 
         if (profit > 0) {
             await addMarksToUser(user, profit);
@@ -1197,9 +1219,101 @@ async function handleCallback(token, cb) {
             message_id: cb.message.message_id,
             text: `🏛 👑 <b>به خزانه اصلی رایشس بانک خوش آمدید!</b> 👑 🏛\n\n` +
                 `🏦 کل سرمایه موجود در بانک: <b>${user.bank_balance}</b> مارک ${MARK_ANIM}\n` +
-                `📈 نرخ سود ساعتی شما: <b>${rate}%</b>\n` +
+                `👑 سطح فعلی رایشس بانک: <b>سطح ${currentLvl}</b> (ضریب سود: <b>${multiplier}x</b>)\n` +
+                `📈 نرخ سود ساعتی شما: <b>${finalRate.toFixed(2)}%</b>\n` +
                 `💎 سود محاسبه شده (${hours} ساعت): <b>+${profit}</b> مارک ${MARK_ANIM} 🚀\n\n` +
                 `✅ <i>مبلغ سود مستقیم به جیب شما واریز شد.</i>`,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // منوی ارتقای سطح رایشس بانک
+    if (data === 'upgrade_reichsbank') {
+        if ((user.bank_balance || 0) < 6000) {
+            return sendTg(token, 'answerCallbackQuery', {
+                callback_query_id: cb.id,
+                text: '❌ برای ارتقای رایشس بانک باید حداقل 6000 مارک در سپرده بانک داشته باشید!',
+                show_alert: true
+            });
+        }
+
+        const currentLvl = user.reichsbank_level || 0;
+        const nextLvl = currentLvl + 1;
+
+        if (nextLvl > 6) {
+            return sendTg(token, 'answerCallbackQuery', {
+                callback_query_id: cb.id,
+                text: '👑 رایشس بانک شما در حداکثر سطح ممکن (سطح 6) قرار دارد!',
+                show_alert: true
+            });
+        }
+
+        const cost = REICHSBANK_UPGRADE_COSTS[nextLvl];
+        const nextMultiplier = REICHSBANK_MULTIPLIERS[nextLvl];
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: `🚀 تایید و پرداخت ${cost} مارک از بانک شخصی`, callback_data: `confirm_upgrade_reichsbank:${nextLvl}:${cost}` }],
+                [{ text: '🔥 انصراف ✖️', callback_data: 'cancel' }]
+            ]
+        };
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `📈 🏛 <b>ارتقای سطح رایشس بانک:</b>\n\n` +
+                `🔹 سطح کنونی: <b>سطح ${currentLvl}</b>\n` +
+                `🔹 سطح جدید: <b>سطح ${nextLvl}</b> (سود ساعتی <b>${nextMultiplier} برابر</b> خواهد شد)\n` +
+                `💳 هزینه ارتقا: <b>${cost}</b> مارک ${MARK_ANIM} (از سپرده بانک شخصی شما کسر می‌شود)\n\n` +
+                `🏛 موجودی سپرده فعلی شما: <b>${user.bank_balance}</b> مارک ${MARK_ANIM}\n\n` +
+                `آیا تصمیم به ارتقای سطح داری سرباز؟ ⚡️`,
+            reply_markup: keyboard,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // تایید و کسر هزینه ارتقا از بانک شخصی
+    if (data.startsWith('confirm_upgrade_reichsbank:')) {
+        const [, targetLvlStr, costStr] = data.split(':');
+        const targetLvl = parseInt(targetLvlStr);
+        const cost = parseInt(costStr);
+
+        if ((user.bank_balance || 0) < 6000) {
+            return sendTg(token, 'answerCallbackQuery', {
+                callback_query_id: cb.id,
+                text: '❌ شرط داشتن حداقل 6000 مارک در رایشس بانک برقرار نیست!',
+                show_alert: true
+            });
+        }
+
+        if ((user.bank_balance || 0) < cost) {
+            return sendTg(token, 'answerCallbackQuery', {
+                callback_query_id: cb.id,
+                text: `💸 موجودی بانک شخصی شما ناکافی است! این ارتقا نیازمند ${cost} مارک در حساب بانکی است.`,
+                show_alert: true
+            });
+        }
+
+        const newBankBalance = user.bank_balance - cost;
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                bank_balance: newBankBalance,
+                reichsbank_level: targetLvl
+            })
+        });
+
+        const newMultiplier = REICHSBANK_MULTIPLIERS[targetLvl];
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `🎉 🏛 <b>ارتقای رایشس بانک با موفقیت انجام شد!</b> 🚀\n\n` +
+                `👑 سطح جدید: <b>سطح ${targetLvl}</b>\n` +
+                `📈 ضریب سود ساعتی شما: <b>${newMultiplier} برابر</b>\n` +
+                `💳 هزینه پرداخت‌شده: <b>${cost}</b> مارک ${MARK_ANIM}\n` +
+                `🏛 موجودی باقی‌مانده در بانک شخصی: <b>${newBankBalance}</b> مارک ${MARK_ANIM}`,
             parse_mode: 'HTML'
         });
     }
