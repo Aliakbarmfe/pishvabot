@@ -1,0 +1,9 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pishvabot",
+  "main": "index.js",
+  "compatibility_date": "2024-09-13",
+  "observability": {
+    "enabled": true
+  }
+}
