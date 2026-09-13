@@ -1,10 +1,13 @@
 /**
  * PishvaBot - Telegram Bot Engine on Cloudflare Workers & Supabase
- * Clean Fixed Version (No Broken HTML Tags in Keyboards)
+ * Clean Fixed Version with Animated Custom Emoji for Marks in Text Messages
  */
 
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inppb2RtZWt5ZXFxaGdnd2pibHJsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTA2MTM5MiwiZXhwIjoyMTA0NjM3MzkyfQ.EcDkLO0H8x5hyXRI3X6P0vvu4ihIuQnoDOOPRxjP3pg";
+
+// ایموجی متحرک مارک (فقط برای استفاده در متن پیام‌ها)
+const MARK_ANIM = '<tg-emoji emoji-id="5897862946431701391">🪙</tg-emoji>';
 
 // ------------------- SUPABASE CLIENT UTILS -------------------
 async function dbFetch(endpoint, options = {}) {
@@ -162,7 +165,7 @@ async function handleMessage(token, msg) {
         const replyText = `🚨 <b>نقض قوانین نظامی!</b> 🚨\n\n` +
             `🔰 <b>درجه شما:</b> ${getTitle(user.level)}\n` +
             `🛑 <b>خطا:</b> استفاده از کلمات سوسول‌بازی (${text})\n` +
-            `💸 <b>جریمه:</b> <b>-${fine}</b> مارک از حساب کسر شد!\n` +
+            `💸 <b>جریمه:</b> <b>-${fine}</b> مارک ${MARK_ANIM} از حساب کسر شد!\n` +
             `⚡️ <i>جدی باش سرباز! اینجا پادگان است!</i> ⚡️`;
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: replyText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
     }
@@ -205,8 +208,8 @@ async function handleMessage(token, msg) {
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
             text: `🫡 <b>درود بر پیشوا!</b> 👑\n\n` +
-                `💎 <b>پاداش وفاداری:</b> <b>+${reward}</b> مارک 💸\n` +
-                `💰 <b>موجودی کل:</b> <b>${user.marks + reward}</b> مارک⚡️`,
+                `💎 <b>پاداش وفاداری:</b> <b>+${reward}</b> مارک ${MARK_ANIM}\n` +
+                `💰 <b>موجودی کل:</b> <b>${user.marks + reward}</b> مارک ${MARK_ANIM}`,
             reply_to_message_id: replyMsgId,
             parse_mode: 'HTML'
         });
@@ -223,7 +226,7 @@ async function handleMessage(token, msg) {
             `💳 <b>واریز به بانک [مقدار]</b> ➔ انتقال پول از جیب به رایشس بانک\n` +
             `🏦 <b>دزدی از بانک</b> ➔ سرقت مسلحانه از خزانه (پرخطر!)\n` +
             `🗡 <b>دزدی از سرباز</b> ➔ درگیری خیابانی و غارت سایر سربازان\n` +
-            `💸 <b>انتقال [مقدار]</b> ➔ انتقال مستقیم مارک به سایر بازیکنان\n` +
+            `💸 <b>انتقال [مقدار]</b> ➔ انتقال مستقیم مارک ${MARK_ANIM} به سایر بازیکنان\n` +
             `🦅 <b>شکار / قفس</b> ➔ شکار موجودات و فروش صیدها در بازار\n\n` +
             `🚨 <b>هشدار:</b> کلمات احوالپرسی غیرنظامی جریمه سنگین دارند! 🧨`;
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: helpText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
@@ -255,8 +258,8 @@ async function handleMessage(token, msg) {
             `✨ ────────────────── ✨\n\n` +
             `👤 <b>نام رزمنده:</b> ${targetUser.first_name}\n` +
             `🎖 <b>درجه نظامی:</b> ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
-            `💎 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک 💵\n` +
-            `🏛 <b>سپرده رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک 🏦\n` +
+            `💎 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
+            `🏛 <b>سپرده رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
             `🗡 <b>قدرت تهاجمی:</b> <b>${power}</b> HP 💣\n` +
             `🛡 <b>قدرت دفاعی (زره):</b> <b>${health}</b> HP 🛡\n` +
             `🦅 <b>سطح تفنگ شکاری:</b> <b>${targetUser.hunting_rifle_level}</b> 🎯\n` +
@@ -290,7 +293,7 @@ async function handleMessage(token, msg) {
         }
 
         if (user.marks < amount) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '💸 <b>موجودی ناکافی!</b> این مقدار مارک در جیب نداری! ❌', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: `💸 <b>موجودی ناکافی!</b> این مقدار مارک ${MARK_ANIM} در جیب نداری! ❌`, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
         }
 
         const keyboard = {
@@ -303,7 +306,7 @@ async function handleMessage(token, msg) {
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
             text: `⚠️ 💸 <b>تاییدیه انتقال وجه نظامی:</b> 💸\n\n` +
-                `آیا از انتقال <b>${amount}</b> مارک به <b>${targetUser.first_name}</b> اطمینان دارید؟ 🤔`,
+                `آیا از انتقال <b>${amount}</b> مارک ${MARK_ANIM} به <b>${targetUser.first_name}</b> اطمینان دارید؟ 🤔`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard,
             parse_mode: 'HTML'
@@ -332,9 +335,9 @@ async function handleMessage(token, msg) {
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
             text: `🏛 🚀 <b>سپرده‌گذاری در رایشس بانک با موفقیت انجام شد!</b> 🚀\n\n` +
-                `💵 <b>مبلغ واریزی:</b> <b>+${amount}</b> مارک\n` +
-                `🏛 <b>سپرده جدید بانک:</b> <b>${user.bank_balance + amount}</b> مارک 💎\n` +
-                `💰 <b>کیف پول باقی‌مانده:</b> <b>${user.marks - amount}</b> مارک⚡️`,
+                `💵 <b>مبلغ واریزی:</b> <b>+${amount}</b> مارک ${MARK_ANIM}\n` +
+                `🏛 <b>سپرده جدید بانک:</b> <b>${user.bank_balance + amount}</b> مارک ${MARK_ANIM}\n` +
+                `💰 <b>کیف پول باقی‌مانده:</b> <b>${user.marks - amount}</b> مارک ${MARK_ANIM}`,
             reply_to_message_id: replyMsgId,
             parse_mode: 'HTML'
         });
@@ -351,7 +354,7 @@ async function handleMessage(token, msg) {
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
             text: `💀 ⚡️ <b>به بازار سیاه زیرزمینی کاپو خوش آمدید!</b> ⚡️ 💀\n\n` +
-                `🔥 <i>اینجا قوانین قانون‌مداران ارزشی ندارد؛ فقط مارک‌های شما حرف اول را می‌زند!</i>\n` +
+                `🔥 <i>اینجا قوانین قانون‌مداران ارزشی ندارد؛ فقط مارک‌های ${MARK_ANIM} شما حرف اول را می‌زند!</i>\n` +
                 `چه تجهیزاتی لازم داری رزمنده؟ 🧨`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard,
@@ -376,7 +379,7 @@ async function handleMessage(token, msg) {
             chat_id: chatId,
             text: `🦅 🎯 <b>ارتقای سلاح شکاری:</b>\n\n` +
                 `🔹 سطح کنونی: <b>${user.hunting_rifle_level}</b>\n` +
-                `🔸 هزینه ارتقا به سطح <b>${nextLvl}</b>: <b>${cost}</b> مارک 💸\n\n` +
+                `🔸 هزینه ارتقا به سطح <b>${nextLvl}</b>: <b>${cost}</b> مارک ${MARK_ANIM}\n\n` +
                 `آیا تصمیم به ارتقا داری سرباز؟ ⚡️`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard,
@@ -458,8 +461,8 @@ async function handleMessage(token, msg) {
             chat_id: chatId,
             text: `🏛 💎 <b>مدیریت سرمایه و رایشس بانک</b> 💎 🏛\n` +
                 `✨ ────────────────── ✨\n\n` +
-                `💰 موجودی در جیب: <b>${user.marks}</b> مارک 💵\n` +
-                `🏛 موجودی در رایشس بانک: <b>${user.bank_balance}</b> مارک 🏦\n` +
+                `💰 موجودی در جیب: <b>${user.marks}</b> مارک ${MARK_ANIM}\n` +
+                `🏛 موجودی در رایشس بانک: <b>${user.bank_balance}</b> مارک ${MARK_ANIM}\n` +
                 `👑 سطح فعلی رایشس بانک: <b>سطح ${user.reichsbank_level}</b>⚡️\n\n` +
                 `💡 <i>برای واریز مبالغ خاص می‌توانید دستور <code>واریز به بانک [مقدار]</code> را بفرستید.</i>`,
             reply_to_message_id: replyMsgId,
@@ -526,10 +529,10 @@ async function handleMessage(token, msg) {
         inv.forEach(i => {
             const val = (TROPHIES[i.item_name] || 0) * i.quantity;
             totalValue += val;
-            listText += `🔹 <b>${i.item_name}</b>: ${i.quantity} عدد (ارزش هرکدام: ${TROPHIES[i.item_name]} | کل: ${val} 💎)\n`;
+            listText += `🔹 <b>${i.item_name}</b>: ${i.quantity} عدد (ارزش هرکدام: ${TROPHIES[i.item_name]} | کل: ${val} ${MARK_ANIM})\n`;
         });
 
-        listText += `\n💵 <b>ارزش مجموع صیدها:</b> <b>${totalValue}</b> مارک 💸`;
+        listText += `\n💵 <b>ارزش مجموع صیدها:</b> <b>${totalValue}</b> مارک ${MARK_ANIM}`;
 
         const keyboard = {
             inline_keyboard: [[{ text: '💎 چگونگی فروش صیدها 🚀', callback_data: 'sell_trophies_prompt' }]]
@@ -566,7 +569,7 @@ async function handleMessage(token, msg) {
                         chat_id: chatId,
                         text: `🎉 💵 <b>معامله سودآور انجام شد!</b> 💵 🎉\n\n` +
                             `تعداد <b>${count}</b> عدد <b>${trophyName}</b> فروخته شد.\n` +
-                            `💎 سود به دست آمده: <b>+${earned}</b> مارک 🚀`,
+                            `💎 سود به دست آمده: <b>+${earned}</b> مارک ${MARK_ANIM} 🚀`,
                         reply_to_message_id: replyMsgId,
                         parse_mode: 'HTML'
                     });
@@ -605,7 +608,7 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `🏛 🚀 <b>واریز انجام شد!</b>\nمبلغ <b>${amount}</b> مارک به رایشس بانک منتقل شد.\n🏦 موجودی بانک: <b>${(user.bank_balance || 0) + amount}</b> مارک`,
+            text: `🏛 🚀 <b>واریز انجام شد!</b>\nمبلغ <b>${amount}</b> مارک ${MARK_ANIM} به رایشس بانک منتقل شد.\n🏦 موجودی بانک: <b>${(user.bank_balance || 0) + amount}</b> مارک ${MARK_ANIM}`,
             parse_mode: 'HTML'
         });
     }
@@ -624,14 +627,14 @@ async function handleCallback(token, cb) {
 
         sendTg(token, 'sendMessage', {
             chat_id: targetId,
-            text: `📩 💵 <b>اعلان واریزی غنیمت!</b>\nکاربر <b>${user.first_name}</b> مقدار <b>${amount}</b> مارک به حساب شما واریز کرد. 🚀`,
+            text: `📩 💵 <b>اعلان واریزی غنیمت!</b>\nکاربر <b>${user.first_name}</b> مقدار <b>${amount}</b> مارک ${MARK_ANIM} به حساب شما واریز کرد. 🚀`,
             parse_mode: 'HTML'
         });
 
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `✅ 🚀 <b>انتقال موفقیت‌آمیز!</b>\nمقدار <b>${amount}</b> مارک با موفقیت به <b>${target[0].first_name}</b> منتقل گردید.`,
+            text: `✅ 🚀 <b>انتقال موفقیت‌آمیز!</b>\nمقدار <b>${amount}</b> مارک ${MARK_ANIM} با موفقیت به <b>${target[0].first_name}</b> منتقل گردید.`,
             parse_mode: 'HTML'
         });
     }
@@ -640,7 +643,7 @@ async function handleCallback(token, cb) {
         let text = "⚔️ 💣 <b>تسلیحات نظامی بازار سیاه:</b> 💣 ⚔️\n\n";
         const buttons = [];
         Object.keys(WEAPONS).forEach(w => {
-            text += `🔹 <b>${w}</b>: ${WEAPONS[w].price} مارک | قدرت: ${WEAPONS[w].damage} HP 💥\n`;
+            text += `🔹 <b>${w}</b>: ${WEAPONS[w].price} مارک ${MARK_ANIM} | قدرت: ${WEAPONS[w].damage} HP 💥\n`;
             buttons.push([{ text: `خرید ${w} (${WEAPONS[w].price} مارک) 🗡`, callback_data: `buy_item:weapon:${w}` }]);
         });
         buttons.push([{ text: '🔙 بازگشت', callback_data: 'cancel' }]);
@@ -651,7 +654,7 @@ async function handleCallback(token, cb) {
         let text = "🛡 🥷 <b>تجهیزات دفاعی بازار سیاه:</b> 🥷 🛡\n\n";
         const buttons = [];
         Object.keys(ARMORS).forEach(a => {
-            text += `🔹 <b>${a}</b>: ${ARMORS[a].price} مارک | زره: +${ARMORS[a].health} HP 🛡\n`;
+            text += `🔹 <b>${a}</b>: ${ARMORS[a].price} مارک ${MARK_ANIM} | زره: +${ARMORS[a].health} HP 🛡\n`;
             buttons.push([{ text: `خرید ${a} (${ARMORS[a].price} مارک) 🥷`, callback_data: `buy_item:armor:${a}` }]);
         });
         buttons.push([{ text: '🔙 بازگشت', callback_data: 'cancel' }]);
@@ -734,10 +737,10 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `💥 💣 <b>نتیجه سرقت مسلحانه از بانک (خزانه: ${bankVault} مارک):</b> 💣 💥\n\n` +
-                `📉 آسیب به تجهیزات: <b>${lostVal}</b> مارک\n` +
-                `💎 غنیمت و پول نقد به دست آمده: <b>+${netProfit}</b> مارک 🚀\n` +
-                `💰 دارایی فعلی جیب: <b>${user.marks + netProfit}</b> مارک 💸`,
+            text: `💥 💣 <b>نتیجه سرقت مسلحانه از بانک (خزانه: ${bankVault} مارک ${MARK_ANIM}):</b> 💣 💥\n\n` +
+                `📉 آسیب به تجهیزات: <b>${lostVal}</b> مارک ${MARK_ANIM}\n` +
+                `💎 غنیمت و پول نقد به دست آمده: <b>+${netProfit}</b> مارک ${MARK_ANIM} 🚀\n` +
+                `💰 دارایی فعلی جیب: <b>${user.marks + netProfit}</b> مارک ${MARK_ANIM}`,
             parse_mode: 'HTML'
         });
     }
@@ -780,7 +783,7 @@ async function handleCallback(token, cb) {
             message_id: cb.message.message_id,
             text: `⚔️ 🩸 <b>نتیجه نبرد خیابانی با ${target.first_name}:</b>\n\n` +
                 `${isWinner ? '🎉 👑 پیروز شدید و منطقه را فتح کردید!' : '💔 🩸 عقب‌نشینی کردید اما غنیمت برداشتید!'}\n` +
-                `💎 غنیمت جنگی شما: <b>+${gain}</b> مارک 🚀`,
+                `💎 غنیمت جنگی شما: <b>+${gain}</b> مارک ${MARK_ANIM} 🚀`,
             parse_mode: 'HTML'
         });
     }
@@ -813,9 +816,9 @@ async function handleCallback(token, cb) {
             chat_id: chatId,
             message_id: cb.message.message_id,
             text: `🏛 👑 <b>به خزانه اصلی رایشس بانک خوش آمدید!</b> 👑 🏛\n\n` +
-                `🏦 کل سرمایه موجود در بانک: <b>${user.bank_balance}</b> مارک\n` +
+                `🏦 کل سرمایه موجود در بانک: <b>${user.bank_balance}</b> مارک ${MARK_ANIM}\n` +
                 `📈 نرخ سود ساعتی شما: <b>${rate}%</b>\n` +
-                `💎 سود محاسبه شده (${hours} ساعت): <b>+${profit}</b> مارک 🚀\n\n` +
+                `💎 سود محاسبه شده (${hours} ساعت): <b>+${profit}</b> مارک ${MARK_ANIM} 🚀\n\n` +
                 `✅ <i>مبلغ سود مستقیم به جیب شما واریز شد.</i>`,
             parse_mode: 'HTML'
         });
@@ -869,4 +872,3 @@ async function handleCallback(token, cb) {
         });
     }
 }
- 
