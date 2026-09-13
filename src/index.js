@@ -115,6 +115,7 @@ function getRandomInt(min, max) {
 
 // تبدیل اعداد فارسی/عربی به انگلیسی
 function convertFaToEnNumbers(str) {
+    if (!str) return '';
     return str.replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
               .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 }
@@ -175,9 +176,9 @@ async function handleMessage(token, msg) {
 
     // ------------------- بخش پیوی (پیام شخصی) -------------------
     if (!isGroup) {
-        // تغییر رمز عبور متنی در پیوی (با ارسال مثلاً: رمز 5555)
-        if (text.startsWith('رمز ') || user.awaiting_pass_change) {
-            let newPass = text.startsWith('رمز ') ? text.replace('رمز ', '').trim() : text.trim();
+        // تغییر رمز عبور متنی در پیوی (مثال: "رمز 5555" یا "رمز 282882")
+        if (text.startsWith('رمز ')) {
+            let newPass = text.replace('رمز ', '').trim();
 
             if (newPass.length < 4) {
                 return sendTg(token, 'sendMessage', {
@@ -189,9 +190,10 @@ async function handleMessage(token, msg) {
                 });
             }
 
+            // ثبت رمز عبور جدید در دیتابیس
             await dbFetch(`users?user_id=eq.${user.user_id}`, {
                 method: 'PATCH',
-                body: JSON.stringify({ site_password: newPass, awaiting_pass_change: false })
+                body: JSON.stringify({ site_password: newPass })
             });
 
             return sendTg(token, 'sendMessage', {
@@ -247,18 +249,15 @@ async function handleMessage(token, msg) {
             return sendHelpMessage(token, chatId, replyMsgId, true);
         }
 
-        // اگر هر پیام دیگری در پیوی فرستاده شد که درباره بازی بود یا دستور شناخته شده نبود، بات هیچ پاسخی نمی‌دهد
         return;
     }
 
     // ------------------- بخش گروه (Group Only) -------------------
 
-    // دستور start/ در گروه کار نمی‌کند
     if (text === '/start') {
         return;
     }
 
-    // راهنمای متنی در گروه
     if (text === 'راهنما') {
         return sendHelpMessage(token, chatId, replyMsgId, false);
     }
@@ -713,7 +712,6 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '✖️ <b>عملیات با دستور رزمنده لغو شد.</b>', parse_mode: 'HTML' });
     }
 
-    // دکمه راهنما
     if (data === 'help_menu') {
         return sendHelpMessage(token, chatId, cb.message.message_id, cb.message.chat.type === 'private');
     }
@@ -752,7 +750,6 @@ async function handleCallback(token, cb) {
         await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - amount }) });
         await dbFetch(`users?user_id=eq.${targetId}`, { method: 'PATCH', body: JSON.stringify({ marks: target[0].marks + amount }) });
 
-        // ارسال اعلان دزدی و انتقال به پیوی/بات شخصی فرستنده و گیرنده
         const senderNotice = `💸 <b>گزارش انتقال وجه:</b>\nشما مقدار <b>${amount}</b> مارک ${MARK_ANIM} به حساب <b>${target[0].first_name}</b> واریز کردید.`;
         const receiverNotice = `💸 <b>واریز جدید:</b>\nمقدار <b>${amount}</b> مارک ${MARK_ANIM} از طرف <b>${user.first_name}</b> به حساب شما واریز شد! 🚀`;
 
@@ -862,7 +859,6 @@ async function handleCallback(token, cb) {
             })
         });
 
-        // گزارش دزدی مستقیم به پیوی کاربر
         const heistReport = `💥 💣 <b>گزارش سرقت مسلحانه از بانک!</b> 💣 💥\n\n` +
             `🏛 <b>خزانه:</b> ${bankVault} مارک ${MARK_ANIM}\n` +
             `📉 <b>خسارت تجهیزات:</b> ${lostVal} مارک ${MARK_ANIM}\n` +
@@ -908,7 +904,6 @@ async function handleCallback(token, cb) {
             })
         });
 
-        // گزارش دزدی به پیوی مهاجم و قربانی
         const attackerNotice = `🚨 ⚔️ <b>گزارش درگیری خیابانی!</b> ⚔️ 🚨\n\n` +
             `🎯 <b>قربانی:</b> ${target.first_name}\n` +
             `💎 <b>غنیمت به سرقت رفته:</b> <b>+${gain}</b> مارک ${MARK_ANIM}\n` +
