@@ -59,7 +59,7 @@ async function getOrCreateUser(tgUser) {
 }
 
 async function getUserByUsername(username) {
-    const cleanUsername = username.replace('@', '');
+    const cleanUsername = username.replace('@', '').trim();
     const data = await dbFetch(`users?username=eq.${cleanUsername}`);
     return data[0] || null;
 }
@@ -91,6 +91,16 @@ const RIFLE_LEVELS = {
     4: 7000,
     5: 14000,
     6: 30000
+};
+
+// زمان‌های انتظار برای شکار به دقیقه
+const HUNTING_COOLDOWNS = {
+    1: 5,
+    2: 10,
+    3: 20,
+    4: 30,
+    5: 20,
+    6: 10
 };
 
 const TROPHIES = {
@@ -329,7 +339,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 3. دریافت آمار
+    // 3. دریافت آمار (به‌روزرسانی شده با آمار برد و باخت دزدی از سرباز)
     if (text === 'آمار' || text === 'امار' || text === 'آمارش' || text === 'امارش' || text.startsWith('آمار @') || text.startsWith('امار @')) {
         let targetUser = user;
 
@@ -362,7 +372,9 @@ async function handleMessage(token, msg) {
             `🦅 <b>سطح تفنگ شکاری:</b> <b>${targetUser.hunting_rifle_level || 0}</b> 🎯\n` +
             `🫡 <b>تعداد ادای احترام:</b> <b>${targetUser.total_doroods || 0}</b> بار\n` +
             `⚠️ <b>سابقه جریمه:</b> <b>${targetUser.total_punishments || 0}</b> بار 🚨\n` +
-            `⚔️ <b>تعداد نبردها:</b> <b>${targetUser.total_attacks || 0}</b> جنگ 💥`;
+            `⚔️ <b>تعداد نبردها:</b> <b>${targetUser.total_attacks || 0}</b> جنگ 💥\n` +
+            `🏆 <b>برد در دزدی از سرباز:</b> <b>${targetUser.soldier_wins || 0}</b> بار ✅\n` +
+            `💀 <b>باخت در دزدی از سرباز:</b> <b>${targetUser.soldier_losses || 0}</b> بار ❌`;
 
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
     }
@@ -519,7 +531,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 9. دزدی از سرباز
+    // 9. دزدی از سرباز (دکمه عمومی / شانس تصادفی)
     if (text === 'دزدی از سرباز') {
         if (user.last_soldier_attack) {
             const diffMin = (new Date() - new Date(user.last_soldier_attack)) / (1000 * 60);
@@ -541,6 +553,99 @@ async function handleMessage(token, msg) {
                 `آیا می‌خواهی به اولین سرباز شناسایی‌شده در منطقه کمین بزنی و غارتش کنی؟ 🔥`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // 9.1 حمله هدفمند به آیدی یا ریپلی: "حمله به @username" یا "حمله به" (روی ریپلی)
+    if (text.startsWith('حمله به')) {
+        let targetUser = null;
+
+        if (msg.reply_to_message) {
+            targetUser = await getOrCreateUser(msg.reply_to_message.from);
+        } else if (text.includes('@')) {
+            const parts = text.split('@');
+            if (parts[1]) {
+                targetUser = await getUserByUsername(parts[1].trim());
+            }
+        }
+
+        if (!targetUser) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '❌ <b>سرباز هدف یافت نشد!</b>\nلطفاً آیدی صحیح را وارد کنید (مثلاً: <code>حمله به @ali</code>) یا روی پیام فرد ریپلی کنید.',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        if (user.user_id === targetUser.user_id) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>نمی‌توانی به خودت حمله کنی!</b> 🤡', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        // بررسی یکسان بودن لول
+        if (user.level !== targetUser.level) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `🚫 <b>امکان حمله وجود ندارد!</b>\n\n` +
+                    `سطح شما: <b>سطح ${user.level}</b>\n` +
+                    `سطح هدف: <b>سطح ${targetUser.level}</b>\n\n` +
+                    `⚡️ <i>تنها می‌توانید به سربازانی که دقیقاً هم‌سطح (هم‌لول) شما هستند حمله کنید!</i>`,
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        // بررسی زمان انتظار برای حمله عمومی/مستقیم
+        if (user.last_soldier_attack) {
+            const diffMin = (new Date() - new Date(user.last_soldier_attack)) / (1000 * 60);
+            if (diffMin < 10) {
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🚨 <b>ردیابی شده‌ای!</b> برای حمله بعدی باید <b>${Math.ceil(10 - diffMin)} دقیقه</b> دیگر کمین کنی! 🥷`, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+            }
+        }
+
+        // محاسبه قدرت
+        const uInv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}`);
+        const tInv = await dbFetch(`user_inventory?user_id=eq.${targetUser.user_id}`);
+
+        let uPower = 100, tPower = 100;
+        uInv.forEach(i => { if (WEAPONS[i.item_name]) uPower += WEAPONS[i.item_name].damage * i.quantity; });
+        tInv.forEach(i => { if (WEAPONS[i.item_name]) tPower += WEAPONS[i.item_name].damage * i.quantity; });
+
+        let isWinner = uPower >= tPower;
+        let gain = isWinner ? Math.floor(uPower * 0.02) : Math.floor(uPower * 0.011);
+
+        // به‌روزرسانی آمار و موجودی
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks + gain,
+                last_soldier_attack: new Date().toISOString(),
+                total_attacks: (user.total_attacks || 0) + 1,
+                soldier_wins: (user.soldier_wins || 0) + (isWinner ? 1 : 0),
+                soldier_losses: (user.soldier_losses || 0) + (isWinner ? 0 : 1)
+            })
+        });
+
+        const attackerNotice = `🚨 ⚔️ <b>گزارش حمله مستقیم به سرباز!</b> ⚔️ 🚨\n\n` +
+            `🎯 <b>قربانی:</b> ${targetUser.first_name}\n` +
+            `💎 <b>غنیمت به سرقت رفته:</b> <b>+${gain}</b> مارک ${MARK_ANIM}\n` +
+            `وضعیت: ${isWinner ? 'پیروزی کامل 🏆' : 'عقب‌نشینی همراه با غنیمت 🩸'}`;
+
+        const victimNotice = `🚨 <b>هشدار حمله مستقیم!</b> 🚨\n\n` +
+            `🥷 <b>سرباز ${user.first_name}</b> به شما حمله کرد و مقدار <b>${gain}</b> مارک ${MARK_ANIM} غنیمت برداشت!`;
+
+        // ارسال پیام اعلان شخصی به پیوی دو طرف
+        sendTg(token, 'sendMessage', { chat_id: user.user_id, text: attackerNotice, parse_mode: 'HTML' });
+        sendTg(token, 'sendMessage', { chat_id: targetUser.user_id, text: victimNotice, parse_mode: 'HTML' });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⚔️ 🩸 <b>نتیجه حمله به ${targetUser.first_name}:</b>\n\n` +
+                `${isWinner ? '🎉 👑 پیروز شدید و منطقه را فتح کردید!' : '💔 🩸 عقب‌نشینی کردید اما غنیمت برداشتید!'}\n` +
+                `💎 غنیمت جنگی شما: <b>+${gain}</b> مارک ${MARK_ANIM} 🚀\n` +
+                `📩 <i>اعلان شخصی و گزارش کامل به پیوی هر دو نفر ارسال شد.</i>`,
+            reply_to_message_id: replyMsgId,
             parse_mode: 'HTML'
         });
     }
@@ -568,29 +673,45 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 11. شکار کردن
+    // 11. شکار کردن (همراه با تایمر جدید بر اساس لول تفنگ)
     if (text === 'شکار') {
-        if (!user.hunting_rifle_level || user.hunting_rifle_level === 0) {
+        const rifleLvl = user.hunting_rifle_level || 0;
+        if (rifleLvl === 0) {
             return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>برای شکار ابتدا باید تفنگ شکاری تهیه کنی!</b> (ارسال کلمه: <code>تفنگ شکاری</code>) 🎯', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        const cdMinutes = HUNTING_COOLDOWNS[rifleLvl] || 5;
+
+        if (user.last_hunt) {
+            const diffMin = (new Date() - new Date(user.last_hunt)) / (1000 * 60);
+            if (diffMin < cdMinutes) {
+                const remMin = Math.ceil(cdMinutes - diffMin);
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: `⏳ <b>شکارگاه خلوت است!</b>\n\nبا تفنگ شکاری سطح ${rifleLvl}، زمان انتظار بین هر شکار <b>${cdMinutes} دقیقه</b> می‌باشد.\nلطفاً <b>${remMin} دقیقه</b> دیگر صبر کنید! 🎯`,
+                    reply_to_message_id: replyMsgId,
+                    parse_mode: 'HTML'
+                });
+            }
         }
 
         const rand = Math.random() * 100;
         let hunted = '';
 
-        if (user.hunting_rifle_level === 1) hunted = 'دورگه';
-        else if (user.hunting_rifle_level === 2) hunted = rand <= 10 ? 'دورگه' : 'غیر اصیل';
-        else if (user.hunting_rifle_level === 3) {
+        if (rifleLvl === 1) hunted = 'دورگه';
+        else if (rifleLvl === 2) hunted = rand <= 10 ? 'دورگه' : 'غیر اصیل';
+        else if (rifleLvl === 3) {
             if (rand <= 2) hunted = 'دورگه';
             else if (rand <= 10) hunted = 'غیر اصیل';
             else hunted = 'انگل';
-        } else if (user.hunting_rifle_level === 4) {
+        } else if (rifleLvl === 4) {
             if (rand <= 1) hunted = 'دورگه';
             else if (rand <= 3) hunted = 'غیر اصیل';
             else if (rand <= 6) hunted = 'انگل';
             else hunted = 'مفت خور';
-        } else if (user.hunting_rifle_level === 5) {
+        } else if (rifleLvl === 5) {
             hunted = rand <= 5 ? 'مفت خور' : 'آفت';
-        } else if (user.hunting_rifle_level === 6) {
+        } else if (rifleLvl === 6) {
             hunted = rand <= 30 ? 'آفت' : 'حشرات موذی';
         }
 
@@ -607,11 +728,18 @@ async function handleMessage(token, msg) {
             });
         }
 
+        // ذخیره زمان آخرین شکار
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ last_hunt: new Date().toISOString() })
+        });
+
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
             text: `🦅 🎯 <b>شکار موفقیت‌آمیز بود!</b> 🎯\n\n` +
                 `شما یک <b>«${hunted}»</b> نگونسار کردید! 🪵\n` +
-                `📦 صید به قفس منتقل شد.`,
+                `📦 صید به قفس منتقل شد.\n` +
+                `⏱ زمان انتظار برای شکار بعدی: <b>${cdMinutes} دقیقه</b>`,
             reply_to_message_id: replyMsgId,
             parse_mode: 'HTML'
         });
@@ -690,9 +818,10 @@ function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
         `💳 <b>واریز به بانک [مقدار]</b> ➔ انتقال پول از جیب به رایشس بانک\n` +
         `🏦 <b>دزدی از بانک</b> ➔ سرقت مسلحانه از خزانه (پرخطر!)\n` +
         `🗡 <b>دزدی از سرباز</b> ➔ درگیری خیابانی و غارت سایر سربازان\n` +
+        `⚔️ <b>حمله به @username</b> ➔ حمله مستقیم به سرباز هم‌لول خود\n` +
         `💸 <b>انتقال [مقدار]</b> ➔ انتقال مستقیم مارک ${MARK_ANIM} به سایر بازیکنان\n` +
         `🦅 <b>تفنگ شکاری</b> ➔ ارتقای سلاح شکاری برای صید موجودات بهتر\n` +
-        `🎯 <b>شکار / قفس</b> ➔ شکار موجودات و فروش صیدها در بازار\n\n` +
+        `🎯 <b>شکار / قفس</b> ➔ شکار موجودات (دارای زمان انتظار) و فروش صیدها\n\n` +
         `🚨 <b>هشدار:</b> کلمات احوالپرسی غیرنظامی جریمه سنگین دارند! 🧨`;
     
     const payload = { chat_id: chatId, text: helpText, parse_mode: 'HTML' };
@@ -889,8 +1018,8 @@ async function handleCallback(token, cb) {
         const tInv = await dbFetch(`user_inventory?user_id=eq.${target.user_id}`);
 
         let uPower = 100, tPower = 100;
-        uInv.forEach(i => { if (WEAPONS[i.item_name]) uPower += WEAPONS[i.item_name].damage; });
-        tInv.forEach(i => { if (WEAPONS[i.item_name]) tPower += WEAPONS[i.item_name].damage; });
+        uInv.forEach(i => { if (WEAPONS[i.item_name]) uPower += WEAPONS[i.item_name].damage * i.quantity; });
+        tInv.forEach(i => { if (WEAPONS[i.item_name]) tPower += WEAPONS[i.item_name].damage * i.quantity; });
 
         let isWinner = uPower >= tPower;
         let gain = isWinner ? Math.floor(uPower * 0.02) : Math.floor(uPower * 0.011);
@@ -900,18 +1029,21 @@ async function handleCallback(token, cb) {
             body: JSON.stringify({
                 marks: user.marks + gain,
                 last_soldier_attack: new Date().toISOString(),
-                total_attacks: (user.total_attacks || 0) + 1
+                total_attacks: (user.total_attacks || 0) + 1,
+                soldier_wins: (user.soldier_wins || 0) + (isWinner ? 1 : 0),
+                soldier_losses: (user.soldier_losses || 0) + (isWinner ? 0 : 1)
             })
         });
 
         const attackerNotice = `🚨 ⚔️ <b>گزارش درگیری خیابانی!</b> ⚔️ 🚨\n\n` +
             `🎯 <b>قربانی:</b> ${target.first_name}\n` +
             `💎 <b>غنیمت به سرقت رفته:</b> <b>+${gain}</b> مارک ${MARK_ANIM}\n` +
-            `وضعیت: ${isWinner ? 'پیروزی کامل' : 'عقب‌نشینی همراه با غنیمت'}`;
+            `وضعیت: ${isWinner ? 'پیروزی کامل 🏆' : 'عقب‌نشینی همراه با غنیمت 🩸'}`;
 
         const victimNotice = `🚨 <b>هشدار سرقت!</b> 🚨\n\n` +
             `🥷 <b>سرباز ${user.first_name}</b> به شما کمین زد و مقدار <b>${gain}</b> مارک ${MARK_ANIM} غنیمت برداشت!`;
 
+        // ارسال پیام پیوی به دو طرف
         sendTg(token, 'sendMessage', { chat_id: user.user_id, text: attackerNotice, parse_mode: 'HTML' });
         sendTg(token, 'sendMessage', { chat_id: target.user_id, text: victimNotice, parse_mode: 'HTML' });
 
