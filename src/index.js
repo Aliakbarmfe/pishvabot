@@ -1,6 +1,13 @@
 /**
  * PishvaBot - Telegram Bot Engine on Cloudflare Workers & Supabase
  * Fixed Version with Custom Titles, Titles/Ranks logic, Permanent PV Keyboard & Private Notifications
+ *
+ * تغییرات این نسخه:
+ * 1) بات فقط در گروه‌های با حداقل ۱۰ عضو فعال است.
+ * 2) دکمه «رمز سایت» به «رمز و نام کاربری سایت» تغییر کرد و امکان تغییر نام کاربری اضافه شد.
+ * 3) هنگام ثبت‌نام، نام کاربری و رمز عبور رندوم به‌صورت پیش‌فرض ثبت می‌شود.
+ * 4) امکان برداشت مارک از رایشس بانک به جیب شخصی اضافه شد.
+ * 5) دکمه‌های شیشه‌ای فقط توسط همان کاربری که ربات به او پاسخ داده قابل استفاده هستند.
  */
 
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
@@ -8,6 +15,9 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 // ایموجی متحرک مارک (فقط برای استفاده در متن پیام‌ها)
 const MARK_ANIM = '<tg-emoji emoji-id="5897862946431701391">🪙</tg-emoji>';
+
+// حداقل تعداد اعضای لازم برای فعال بودن بات در گروه
+const MIN_GROUP_MEMBERS = 10;
 
 // ------------------- SUPABASE CLIENT UTILS -------------------
 async function dbFetch(endpoint, options = {}) {
@@ -24,6 +34,21 @@ async function dbFetch(endpoint, options = {}) {
         throw new Error(`DB Error [${res.status}]: ${err}`);
     }
     return res.json();
+}
+
+// تولید نام کاربری رندوم انگلیسی برای سایت (حداقل ۵ کاراکتر)
+function generateRandomUsername() {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let result = 'user';
+    for (let i = 0; i < 5; i++) {
+        result += chars[getRandomInt(0, chars.length - 1)];
+    }
+    return result;
+}
+
+// تولید رمز عبور رندوم انگلیسی/عددی برای سایت
+function generateRandomPassword() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 async function getOrCreateUser(tgUser) {
@@ -53,8 +78,9 @@ async function getOrCreateUser(tgUser) {
         return data[0];
     }
 
-    // تولید رمز عبور تصادفی ۶ رقمی برای کاربر جدید
-    const randomPassword = Math.floor(100000 + Math.random() * 900000).toString();
+    // تولید نام کاربری و رمز عبور رندوم پیش‌فرض برای کاربر جدید
+    const randomUsername = generateRandomUsername();
+    const randomPassword = generateRandomPassword();
 
     const newUser = {
         user_id: tgUser.id,
@@ -66,6 +92,7 @@ async function getOrCreateUser(tgUser) {
         max_level: 1,
         bank_balance: 0,
         reichsbank_level: 0,
+        site_username: randomUsername,
         site_password: randomPassword
     };
     const created = await dbFetch(`users`, {
@@ -201,12 +228,44 @@ function convertFaToEnNumbers(str) {
               .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
 }
 
+// استخراج شناسه عددی بات از توکن (بخش قبل از ':')
+function getBotId(token) {
+    const idPart = (token || '').split(':')[0];
+    return parseInt(idPart, 10);
+}
+
+// افزودن شناسه صاحب دکمه به callback_data (برای محدود کردن استفاده فقط به همان کاربر)
+function withOwner(callbackData, ownerId) {
+    return `${callbackData}|${ownerId}`;
+}
+
+// جدا کردن شناسه صاحب دکمه از callback_data
+function parseCallbackData(raw) {
+    const idx = raw.lastIndexOf('|');
+    if (idx === -1) return { action: raw, ownerId: null };
+    const ownerPart = raw.substring(idx + 1);
+    const ownerId = parseInt(ownerPart, 10);
+    if (isNaN(ownerId)) return { action: raw, ownerId: null };
+    return { action: raw.substring(0, idx), ownerId };
+}
+
+// دریافت تعداد اعضای یک گروه از تلگرام
+async function getChatMemberCount(token, chatId) {
+    try {
+        const res = await sendTg(token, 'getChatMemberCount', { chat_id: chatId });
+        if (res && typeof res.result === 'number') return res.result;
+        return 999; // در صورت نامشخص بودن، بات مسدود نمی‌شود
+    } catch (e) {
+        return 999; // در صورت بروز خطا در ارتباط با تلگرام، بات مسدود نمی‌شود
+    }
+}
+
 // کیبورد دائمی مخصوص پیوی
 function getPvReplyKeyboard() {
     return {
         keyboard: [
             [{ text: '🌐 ورود به سایت رایش بزرگ' }],
-            [{ text: '🔑 رمز سایت' }, { text: '📖 راهنما' }]
+            [{ text: '🔑 رمز و نام کاربری سایت' }, { text: '📖 راهنما' }]
         ],
         resize_keyboard: true,
         is_persistent: true
@@ -248,23 +307,107 @@ export default {
 async function handleMessage(token, msg) {
     if (!msg.from || msg.from.is_bot) return;
 
-    const user = await getOrCreateUser(msg.from);
     const chatId = msg.chat.id;
+    const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
+
+    // ------------------- بررسی افزودن اعضای جدید (از جمله خود بات) -------------------
+    if (msg.new_chat_members && msg.new_chat_members.length > 0) {
+        if (isGroup) {
+            const botId = getBotId(token);
+            const botWasAdded = msg.new_chat_members.some(m => m.id === botId);
+
+            if (botWasAdded) {
+                const memberCount = await getChatMemberCount(token, chatId);
+                if (memberCount < MIN_GROUP_MEMBERS) {
+                    return sendTg(token, 'sendMessage', {
+                        chat_id: chatId,
+                        text: `👑 ✨ <b>با درود بر فرمانده!</b> ✨ 👑\n\n` +
+                            `⚠️ <b>این گروه شرایط فعال‌سازی بات رایش بزرگ را ندارد.</b>\n\n` +
+                            `📊 حداقل تعداد اعضای لازم: <b>${MIN_GROUP_MEMBERS}</b> نفر\n` +
+                            `👥 تعداد اعضای فعلی گروه: <b>${memberCount}</b> نفر\n\n` +
+                            `🚀 لطفاً ابتدا اعضای بیشتری به گروه دعوت کنید، سپس بات به‌طور خودکار فعال خواهد شد.`,
+                        parse_mode: 'HTML'
+                    });
+                }
+            }
+        }
+        // پیام‌های مربوط به افزودن عضو نیازی به پردازش دستورات ندارند
+        return;
+    }
+
+    // ------------------- محدودیت فعالیت بات در گروه‌های کوچک -------------------
+    if (isGroup) {
+        const memberCount = await getChatMemberCount(token, chatId);
+        if (memberCount < MIN_GROUP_MEMBERS) {
+            return; // بات در گروه‌های کمتر از حداقل عضو، هیچ فعالیتی انجام نمی‌دهد
+        }
+    }
+
+    const user = await getOrCreateUser(msg.from);
     const rawText = (msg.text || '').trim();
     const text = convertFaToEnNumbers(rawText);
     const replyMsgId = msg.message_id;
-    const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
 
     // ------------------- بخش پیوی (پیام شخصی) -------------------
     if (!isGroup) {
+        // تغییر نام کاربری سایت در پیوی (مثال: "نام کاربری aliaa")
+        if (text.startsWith('نام کاربری ')) {
+            const newUsername = text.replace('نام کاربری ', '').trim();
+            const englishOnly = /^[A-Za-z0-9_]+$/;
+
+            if (newUsername.length < 5) {
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: '❌ <b>نام کاربری باید حداقل ۵ کاراکتر باشد!</b>\nلطفاً مجدداً ارسال کنید (مثال: <code>نام کاربری aliaa</code>):',
+                    reply_to_message_id: replyMsgId,
+                    reply_markup: getPvReplyKeyboard(),
+                    parse_mode: 'HTML'
+                });
+            }
+
+            if (!englishOnly.test(newUsername)) {
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: '❌ <b>نام کاربری باید فقط شامل حروف و اعداد انگلیسی باشد!</b>\nلطفاً مجدداً ارسال کنید (مثال: <code>نام کاربری aliaa</code>):',
+                    reply_to_message_id: replyMsgId,
+                    reply_markup: getPvReplyKeyboard(),
+                    parse_mode: 'HTML'
+                });
+            }
+
+            await dbFetch(`users?user_id=eq.${user.user_id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ site_username: newUsername })
+            });
+
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `✅ <b>نام کاربری جدید شما با موفقیت ثبت شد!</b>\n👤 نام کاربری جدید: <code>${newUsername}</code>`,
+                reply_to_message_id: replyMsgId,
+                reply_markup: getPvReplyKeyboard(),
+                parse_mode: 'HTML'
+            });
+        }
+
         // تغییر رمز عبور متنی در پیوی (مثال: "رمز 5555" یا "رمز 282882")
         if (text.startsWith('رمز ')) {
             let newPass = text.replace('رمز ', '').trim();
+            const englishOnly = /^[A-Za-z0-9_]+$/;
 
             if (newPass.length < 4) {
                 return sendTg(token, 'sendMessage', {
                     chat_id: chatId,
                     text: '❌ <b>رمز عبور باید حداقل ۴ کاراکتر باشد!</b>\nلطفاً مجدداً ارسال کنید (مثال: <code>رمز 5555</code>):',
+                    reply_to_message_id: replyMsgId,
+                    reply_markup: getPvReplyKeyboard(),
+                    parse_mode: 'HTML'
+                });
+            }
+
+            if (!englishOnly.test(newPass)) {
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: '❌ <b>رمز عبور باید فقط شامل حروف و اعداد انگلیسی باشد!</b>\nلطفاً مجدداً ارسال کنید (مثال: <code>رمز 5555</code>):',
                     reply_to_message_id: replyMsgId,
                     reply_markup: getPvReplyKeyboard(),
                     parse_mode: 'HTML'
@@ -311,16 +454,24 @@ async function handleMessage(token, msg) {
             });
         }
 
-        if (text === '🔑 رمز سایت') {
-            const passText = `🔑 <b>رمز عبور فعلی شما:</b> <code>${user.site_password}</code>\n\n` +
-                `✏️ برای تغییر رمز عبور، عبارت زیر را ارسال کنید:\n` +
-                `<code>رمز (رمز جدید)</code>\n\n` +
+        if (text === '🔑 رمز و نام کاربری سایت') {
+            const infoText = `🔑 <b>اطلاعات ورود فعلی شما به سایت:</b>\n\n` +
+                `👤 <b>نام کاربری:</b> <code>${user.site_username}</code>\n` +
+                `🔒 <b>رمز عبور:</b> <code>${user.site_password}</code>\n\n` +
+                `✏️ <b>برای تغییر نام کاربری یا رمز عبور</b>، عبارت‌های زیر را ارسال کنید:\n` +
+                `<code>نام کاربری (نام دلخواه)</code>\n` +
+                `<code>رمز (رمز دلخواه)</code>\n\n` +
                 `<b>مثال:</b>\n` +
-                `<code>رمز 5555</code>`;
+                `<code>نام کاربری aliaa</code>\n` +
+                `<code>رمز 1828281</code>\n\n` +
+                `⚠️ <b>نکات مهم:</b>\n` +
+                `• نام کاربری باید حداقل <b>۵ کاراکتر</b> باشد.\n` +
+                `• نام کاربری و رمز عبور باید <b>فقط انگلیسی</b> (حروف/اعداد لاتین) باشند.`;
 
             return sendTg(token, 'sendMessage', {
                 chat_id: chatId,
-                text: passText,
+                text: infoText,
+                reply_to_message_id: replyMsgId,
                 reply_markup: getPvReplyKeyboard(),
                 parse_mode: 'HTML'
             });
@@ -525,8 +676,8 @@ async function handleMessage(token, msg) {
 
         const keyboard = {
             inline_keyboard: [[
-                { text: '💎 تایید و واریز 🚀', callback_data: `confirm_transfer:${targetUser.user_id}:${amount}` },
-                { text: '🔥 انصراف ✖️', callback_data: 'cancel' }
+                { text: '💎 تایید و واریز 🚀', callback_data: withOwner(`confirm_transfer:${targetUser.user_id}:${amount}`, user.user_id) },
+                { text: '🔥 انصراف ✖️', callback_data: withOwner('cancel', user.user_id) }
             ]]
         };
 
@@ -570,11 +721,41 @@ async function handleMessage(token, msg) {
         });
     }
 
+    // 5.1 برداشت پول از رایشس بانک به جیب شخصی
+    if (text.startsWith('برداشت از رایشس')) {
+        const amount = parseInt(text.replace('برداشت از رایشس', '').trim());
+        if (isNaN(amount) || amount <= 0) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '🚫 <b>فرمت اشتباه!</b>\nمثال: <code>برداشت از رایشس 400</code> 🏦', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        if ((user.bank_balance || 0) < amount) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '💸 <b>موجودی رایشس بانک شما کافی نیست!</b>', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks + amount,
+                bank_balance: user.bank_balance - amount
+            })
+        });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🏛 🚀 <b>برداشت از رایشس بانک با موفقیت انجام شد!</b> 🚀\n\n` +
+                `💵 <b>مبلغ برداشت‌شده:</b> <b>-${amount}</b> مارک ${MARK_ANIM}\n` +
+                `🏛 <b>سپرده باقی‌مانده بانک:</b> <b>${user.bank_balance - amount}</b> مارک ${MARK_ANIM}\n` +
+                `💰 <b>موجودی جدید جیب:</b> <b>${user.marks + amount}</b> مارک ${MARK_ANIM}`,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'HTML'
+        });
+    }
+
     // 6. بازار سیاه
     if (text === 'بازار سیاه') {
         const keyboard = {
             inline_keyboard: [
-                [{ text: '⚔️ اسلحه خانه سنگین 💣', callback_data: 'bm_weapons' }, { text: '🛡 تجهیزات زرهی و دفاعی 🥷', callback_data: 'bm_armors' }]
+                [{ text: '⚔️ اسلحه خانه سنگین 💣', callback_data: withOwner('bm_weapons', user.user_id) }, { text: '🛡 تجهیزات زرهی و دفاعی 🥷', callback_data: withOwner('bm_armors', user.user_id) }]
             ]
         };
         return sendTg(token, 'sendMessage', {
@@ -597,8 +778,8 @@ async function handleMessage(token, msg) {
         const cost = RIFLE_LEVELS[nextLvl];
         const keyboard = {
             inline_keyboard: [[
-                { text: `🚀 ارتقا به سطح ${nextLvl} (${cost} مارک) 💎`, callback_data: `buy_rifle:${nextLvl}:${cost}` },
-                { text: '🔥 انصراف ✖️', callback_data: 'cancel' }
+                { text: `🚀 ارتقا به سطح ${nextLvl} (${cost} مارک) 💎`, callback_data: withOwner(`buy_rifle:${nextLvl}:${cost}`, user.user_id) },
+                { text: '🔥 انصراف ✖️', callback_data: withOwner('cancel', user.user_id) }
             ]]
         };
         return sendTg(token, 'sendMessage', {
@@ -631,8 +812,8 @@ async function handleMessage(token, msg) {
 
         const keyboard = {
             inline_keyboard: [[
-                { text: '🧨 شلیک و حمله به بانک! 💣', callback_data: 'confirm_bank_heist' },
-                { text: '🏃‍♂️ عقب‌نشینی ✖️', callback_data: 'cancel' }
+                { text: '🧨 شلیک و حمله به بانک! 💣', callback_data: withOwner('confirm_bank_heist', user.user_id) },
+                { text: '🏃‍♂️ عقب‌نشینی ✖️', callback_data: withOwner('cancel', user.user_id) }
             ]]
         };
 
@@ -659,8 +840,8 @@ async function handleMessage(token, msg) {
 
         const keyboard = {
             inline_keyboard: [[
-                { text: '⚔️ ردگیری و شلیک به سرباز 💣', callback_data: 'confirm_soldier_attack' },
-                { text: '✖️ لغو عملیات', callback_data: 'cancel' }
+                { text: '⚔️ ردگیری و شلیک به سرباز 💣', callback_data: withOwner('confirm_soldier_attack', user.user_id) },
+                { text: '✖️ لغو عملیات', callback_data: withOwner('cancel', user.user_id) }
             ]]
         };
 
@@ -767,13 +948,13 @@ async function handleMessage(token, msg) {
         const canUpgrade = (user.bank_balance || 0) >= 6000;
         
         const inline_keyboard = [
-            [{ text: '💎 برداشت سود ساعتی رایشس بانک 🚀', callback_data: 'reichsbank_menu' }],
-            [{ text: '💵 واریز 1000 مارک 📥', callback_data: 'quick_deposit_1000' }, { text: '💵 واریز کل جیب 📥', callback_data: 'quick_deposit_all' }]
+            [{ text: '💎 برداشت سود ساعتی رایشس بانک 🚀', callback_data: withOwner('reichsbank_menu', user.user_id) }],
+            [{ text: '💵 واریز 1000 مارک 📥', callback_data: withOwner('quick_deposit_1000', user.user_id) }, { text: '💵 واریز کل جیب 📥', callback_data: withOwner('quick_deposit_all', user.user_id) }]
         ];
 
         // فقط اگر حداقل ۶۰۰۰ مارک در رایشس بانک داشته باشد، دکمه ارتقا نشان داده می‌شود
         if (canUpgrade) {
-            inline_keyboard.push([{ text: '📈 ارتقای سطح رایشس بانک 👑', callback_data: 'upgrade_reichsbank' }]);
+            inline_keyboard.push([{ text: '📈 ارتقای سطح رایشس بانک 👑', callback_data: withOwner('upgrade_reichsbank', user.user_id) }]);
         }
 
         return sendTg(token, 'sendMessage', {
@@ -784,7 +965,8 @@ async function handleMessage(token, msg) {
                 `🏛 موجودی در رایشس بانک: <b>${user.bank_balance}</b> مارک ${MARK_ANIM}\n` +
                 `👑 سطح فعلی رایشس بانک: <b>سطح ${user.reichsbank_level || 0}</b>⚡️\n` +
                 `${!canUpgrade ? '⚠️ <i>برای آزادسازی دکمه ارتقای رایشس بانک باید حداقل 6000 مارک در رایشس بانک داشته باشید.</i>\n\n' : ''}` +
-                `💡 <i>برای واریز مبالغ خاص می‌توانید دستور <code>واریز به بانک [مقدار]</code> را بفرستید.</i>`,
+                `💡 <i>برای واریز مبالغ خاص می‌توانید دستور <code>واریز به بانک [مقدار]</code> را بفرستید.</i>\n` +
+                `💡 <i>برای برداشت مبالغ خاص می‌توانید دستور <code>برداشت از رایشس [مقدار]</code> را بفرستید.</i>`,
             reply_to_message_id: replyMsgId,
             reply_markup: { inline_keyboard },
             parse_mode: 'HTML'
@@ -877,7 +1059,7 @@ async function handleMessage(token, msg) {
         listText += `\n💵 <b>ارزش مجموع صیدها:</b> <b>${totalValue}</b> مارک ${MARK_ANIM}`;
 
         const keyboard = {
-            inline_keyboard: [[{ text: '💎 چگونگی فروش صیدها 🚀', callback_data: 'sell_trophies_prompt' }]]
+            inline_keyboard: [[{ text: '💎 چگونگی فروش صیدها 🚀', callback_data: withOwner('sell_trophies_prompt', user.user_id) }]]
         };
 
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: listText, reply_to_message_id: replyMsgId, reply_markup: keyboard, parse_mode: 'HTML' });
@@ -924,13 +1106,14 @@ async function handleMessage(token, msg) {
 function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
     const helpText = `⚔️ 🔥 <b>پایگاه اطلاعاتی بات</b> 🔥 ⚔️\n` +
         `✨ ────────────────── ✨\n\n` +
-        `🚨 <b>مهم: بازی فقط درون گروه فعال می‌باشد!</b>\n\n` +
+        `🚨 <b>مهم: بازی فقط درون گروه فعال می‌باشد و گروه باید حداقل ${MIN_GROUP_MEMBERS} عضو داشته باشد!</b>\n\n` +
         `🫡 <b>درود</b> ➔ دریافت پاداش روزانه (دارای زمان انتظار)\n` +
         `📊 <b>آمار / آمارش</b> ➔ مشاهده شناسنامه رزمی، لقب و مالی شما\n` +
         `🏷 <b>لقب [اسم]</b> ➔ ثبت لقب جدید برای خودتان (مثال: <code>لقب علی</code>)\n` +
         `💀 <b>بازار سیاه</b> ➔ خرید تسلیحات سنگین و زره‌های نظامی\n` +
         `🏛 <b>بانک</b> ➔ مدیریت سرمایه و سپرده‌گذاری در رایشس بانک\n` +
         `💳 <b>واریز به بانک [مقدار]</b> ➔ انتقال پول از جیب به رایشس بانک\n` +
+        `💳 <b>برداشت از رایشس [مقدار]</b> ➔ انتقال پول از رایشس بانک به جیب\n` +
         `🏦 <b>دزدی از بانک</b> ➔ سرقت مسلحانه از خزانه (پرخطر!)\n` +
         `🗡 <b>دزدی از سرباز</b> ➔ درگیری خیابانی و غارت سایر سربازان\n` +
         `⚔️ <b>حمله به @username</b> ➔ حمله مستقیم به سرباز هم‌لول خود\n` +
@@ -950,7 +1133,19 @@ function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
 async function handleCallback(token, cb) {
     const user = await getOrCreateUser(cb.from);
     const chatId = cb.message.chat.id;
-    const data = cb.data;
+
+    // جدا کردن صاحب اصلی دکمه از callback_data و بررسی مجاز بودن کلیک‌کننده
+    const { action, ownerId } = parseCallbackData(cb.data);
+
+    if (ownerId !== null && cb.from.id !== ownerId) {
+        return sendTg(token, 'answerCallbackQuery', {
+            callback_query_id: cb.id,
+            text: '🚫 این دستور برای شما نیست! این عملیات مخصوص شخص دیگری است.',
+            show_alert: true
+        });
+    }
+
+    const data = action;
 
     if (data === 'cancel') {
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '✖️ <b>عملیات با دستور رزمنده لغو شد.</b>', parse_mode: 'HTML' });
@@ -1030,9 +1225,9 @@ async function handleCallback(token, cb) {
         const buttons = [];
         Object.keys(WEAPONS).forEach(w => {
             text += `🔹 <b>${w}</b>: ${WEAPONS[w].price} مارک ${MARK_ANIM} | قدرت: ${WEAPONS[w].damage} HP 💥\n`;
-            buttons.push([{ text: `خرید ${w} (${WEAPONS[w].price} مارک) 🗡`, callback_data: `buy_item:weapon:${w}` }]);
+            buttons.push([{ text: `خرید ${w} (${WEAPONS[w].price} مارک) 🗡`, callback_data: withOwner(`buy_item:weapon:${w}`, cb.from.id) }]);
         });
-        buttons.push([{ text: '🔙 بازگشت', callback_data: 'cancel' }]);
+        buttons.push([{ text: '🔙 بازگشت', callback_data: withOwner('cancel', cb.from.id) }]);
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text, reply_markup: { inline_keyboard: buttons }, parse_mode: 'HTML' });
     }
 
@@ -1041,9 +1236,9 @@ async function handleCallback(token, cb) {
         const buttons = [];
         Object.keys(ARMORS).forEach(a => {
             text += `🔹 <b>${a}</b>: ${ARMORS[a].price} مارک ${MARK_ANIM} | زره: +${ARMORS[a].health} HP 🛡\n`;
-            buttons.push([{ text: `خرید ${a} (${ARMORS[a].price} مارک) 🥷`, callback_data: `buy_item:armor:${a}` }]);
+            buttons.push([{ text: `خرید ${a} (${ARMORS[a].price} مارک) 🥷`, callback_data: withOwner(`buy_item:armor:${a}`, cb.from.id) }]);
         });
-        buttons.push([{ text: '🔙 بازگشت', callback_data: 'cancel' }]);
+        buttons.push([{ text: '🔙 بازگشت', callback_data: withOwner('cancel', cb.from.id) }]);
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text, reply_markup: { inline_keyboard: buttons }, parse_mode: 'HTML' });
     }
 
@@ -1253,8 +1448,8 @@ async function handleCallback(token, cb) {
 
         const keyboard = {
             inline_keyboard: [
-                [{ text: `🚀 تایید و پرداخت ${cost} مارک از بانک شخصی`, callback_data: `confirm_upgrade_reichsbank:${nextLvl}:${cost}` }],
-                [{ text: '🔥 انصراف ✖️', callback_data: 'cancel' }]
+                [{ text: `🚀 تایید و پرداخت ${cost} مارک از بانک شخصی`, callback_data: withOwner(`confirm_upgrade_reichsbank:${nextLvl}:${cost}`, cb.from.id) }],
+                [{ text: '🔥 انصراف ✖️', callback_data: withOwner('cancel', cb.from.id) }]
             ]
         };
 
