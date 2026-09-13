@@ -38,7 +38,9 @@ async function getOrCreateUser(tgUser) {
         username: tgUser.username || null,
         first_name: tgUser.first_name || "سرباز",
         marks: 0,
-        level: 1
+        level: 1,
+        bank_balance: 0,
+        reichsbank_level: 0
     };
     const created = await dbFetch(`users`, {
         method: 'POST',
@@ -93,15 +95,9 @@ const TROPHIES = {
 
 // ------------------- HELPER FUNCTIONS -------------------
 function getTitle(level) {
-    if (level <= 3) return "آشغال سرباز 🎖";
-    if (level <= 5) return "جناب سرباز 🎖";
-    return "سرهنگ ارشد 🎖";
-}
-
-function getToneGreeting(level, name) {
-    if (level <= 3) return `هی آشغال (${name})! بنال ببینم چی میخوای! 🗿🔥`;
-    if (level <= 5) return `سرباز (${name})، گزارش بده! وضعیت رو اعلام کن. 🎖💥`;
-    return `درود و ادای احترام خدمت جناب سرهنگ (${name})! گوش به فرمانیم فرمانده! 🫡⚔️`;
+    if (level <= 3) return "🎖️ سرباز صفر";
+    if (level <= 5) return "⚔️ جناب سروان";
+    return "👑 افسر ارشد پیشوا";
 }
 
 function getRandomInt(min, max) {
@@ -162,14 +158,18 @@ async function handleMessage(token, msg) {
             body: JSON.stringify({ marks: newMarks, total_punishments: user.total_punishments + 1 })
         });
 
-        const replyText = `${getTitle(user.level)}\n\n⚠️ **تخلف نظامی!** استفاده از کلمات سوسول‌بازی (سلام/های/هلو) قدغن است!\n💥 **جریمه:** ${fine} مارک از حسابت کسر شد.\n🔥 جدی باش سرباز!`;
+        const replyText = `🚨 **نقض قوانین نظامی!** 🚨\n\n` +
+            `🔰 **درجه شما:** ${getTitle(user.level)}\n` +
+            `🛑 **خطا:** استفاده از کلمات سوسول‌بازی (${text})\n` +
+            `💸 **جریمه:** **-${fine}** مارک از حساب کسر شد!\n` +
+            `⚡️ _جدی باش سرباز! اینجا پادگان است!_ ⚡️`;
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: replyText, reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
     }
 
     // 2. دستور درود (جایزه)
     if (text === 'درود') {
         const cooldowns = { 1: 30, 2: 30, 3: 60, 4: 150, 5: 120, 6: 120 };
-        const cdSec = cooldowns[user.level];
+        const cdSec = cooldowns[user.level] || 30;
 
         if (user.last_dorood) {
             const diffSec = (new Date() - new Date(user.last_dorood)) / 1000;
@@ -177,7 +177,7 @@ async function handleMessage(token, msg) {
                 const rem = Math.ceil(cdSec - diffSec);
                 return sendTg(token, 'sendMessage', {
                     chat_id: chatId,
-                    text: `🛑 **صبر کن سرباز!** تا درود بعدی باید **${rem} ثانیه** دیگه صبر کنی! 🗿`,
+                    text: `⌛ **صبر کن سرباز!**\n\n⏱ برای ادا احترام بعدی باید **${rem} ثانیه** دیگر منتظر بمانی! ⏳`,
                     reply_to_message_id: replyMsgId,
                     parse_mode: 'Markdown'
                 });
@@ -203,7 +203,9 @@ async function handleMessage(token, msg) {
 
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `🫡 **درود بر پیشوا!**\n🎖 پاداش دریافت شد: **+${reward} مارک**\n💰 کل دارایی: **${user.marks + reward} مارک**`,
+            text: `🫡 **درود بر پیشوا!** 👑\n\n` +
+                `💎 **پاداش وفاداری:** **+${reward}** مارک 💸\n` +
+                `💰 **موجودی کل:** **${user.marks + reward}** مارک⚡️`,
             reply_to_message_id: replyMsgId,
             parse_mode: 'Markdown'
         });
@@ -211,15 +213,18 @@ async function handleMessage(token, msg) {
 
     // 3. راهنما
     if (text === 'راهنما') {
-        const helpText = `⚔️ **راهنمای پایگاه نظامی پیشوا بات** ⚔️\n\n` +
-            `🎖 **درود:** دریافت مارک رایگان (همراه با تایمر cooldown)\n` +
-            `📊 **آمار / آمارش:** مشاهده اطلاعات خود یا کاربر ریپلای شده\n` +
-            `🛒 **بازار سیاه:** خرید سلاح و جلیقه‌های زرهی\n` +
-            `🏦 **بانک / دزدی از بانک:** مدیریت حساب یا عملیات سرقت مسلحانه\n` +
-            `⚔️ **دزدی از سرباز:** مبارزه و غارت سربازان دیگر\n` +
-            `💸 **انتقال [مقدار]:** انتقال مارک به سایر افراد (روی پیام ریپلای کنید)\n` +
-            `🦅 **شکار / قفس:** شکار با تفنگ شکاری و فروش در قفس\n` +
-            `⚠️ **هشدار:** کلمات سوسول‌بازی (سلام/های) جریمه مارک دارند!`;
+        const helpText = `⚔️ 🔥 **پایگاه اطلاعاتی پیشوا بات** 🔥 ⚔️\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `🫡 **درود** ➔ دریافت پاداش روزانه (دارای زمان انتظار)\n` +
+            `📊 **آمار / آمارش** ➔ مشاهده شناسنامه رزمی و مالی شما\n` +
+            `💀 **بازار سیاه** ➔ خرید تسلیحات سنگین و زره‌های نظامی\n` +
+            `🏛 **بانک** ➔ مدیریت سرمایه و سپرده‌گذاری در رایشس بانک\n` +
+            `💳 **واریز به بانک [مقدار]** ➔ انتقال پول از جیب به رایشس بانک\n` +
+            `🏦 **دزدی از بانک** ➔ سرقت مسلحانه از خزانه (پرخطر!)\n` +
+            `🗡 **دزدی از سرباز** ➔ درگیری خیابانی و غارت سایر سربازان\n` +
+            `💸 **انتقال [مقدار]** ➔ انتقال مستقیم مارک به سایر بازیکنان\n` +
+            `🦅 **شکار / قفس** ➔ شکار موجودات و فروش صیدها در بازار\n\n` +
+            `🚨 **هشدار:** کلمات احوالپرسی غیرنظامی جریمه سنگین دارند! 🧨`;
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: helpText, reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
     }
 
@@ -234,7 +239,7 @@ async function handleMessage(token, msg) {
             if (parts[1]) {
                 const found = await getUserByUsername(parts[1].trim());
                 if (found) targetUser = found;
-                else return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ کاربر مورد نظر پیدا نشد!', reply_to_message_id: replyMsgId });
+                else return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **کاربر مورد نظر در مقر پیدا نشد!** 🔎', reply_to_message_id: replyMsgId });
             }
         }
 
@@ -245,17 +250,18 @@ async function handleMessage(token, msg) {
             if (ARMORS[i.item_name]) health += ARMORS[i.item_name].health * i.quantity;
         });
 
-        const statsText = `📊 **شناسنامه نظامی سرباز:**\n\n` +
-            `👤 **نام:** ${targetUser.first_name}\n` +
-            `🎖 **درجه:** ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
-            `💰 **موجودی (مارک):** ${targetUser.marks}\n` +
-            `🏦 **موجودی بانک:** ${targetUser.bank_balance}\n` +
-            `⚔️ **قدرت حمله:** ${power} HP\n` +
-            `🛡 **قدرت دفاع (خون):** ${health} HP\n` +
-            `🦅 **سطح تفنگ شکاری:** ${targetUser.hunting_rifle_level}\n` +
-            `🫡 **تعداد درودها:** ${targetUser.total_doroods}\n` +
-            `💥 **تعداد جریمه‌ها:** ${targetUser.total_punishments}\n` +
-            `⚔️ **تعداد نبردها:** ${targetUser.total_attacks}`;
+        const statsText = `📜 🔮 **شناسنامه و آمار نظامی:** 🔮 📜\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `👤 **نام رزمنده:** ${targetUser.first_name}\n` +
+            `🎖 **درجه نظامی:** ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
+            `💎 **موجودی جیب:** **${targetUser.marks}** مارک 💵\n` +
+            `🏛 **سپرده رایشس بانک:** **${targetUser.bank_balance}** مارک 🏦\n` +
+            `🗡 **قدرت تهاجمی:** **${power}** HP 💣\n` +
+            `🛡 **قدرت دفاعی (زره):** **${health}** HP 🛡\n` +
+            `🦅 **سطح تفنگ شکاری:** **${targetUser.hunting_rifle_level}** 🎯\n` +
+            `🫡 **تعداد ادای احترام:** **${targetUser.total_doroods}** بار\n` +
+            `⚠️ **سابقه جریمه:** **${targetUser.total_punishments}** بار 🚨\n` +
+            `⚔️ **تعداد نبردها:** **${targetUser.total_attacks}** جنگ 💥`;
 
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
     }
@@ -275,76 +281,111 @@ async function handleMessage(token, msg) {
         }
 
         if (isNaN(amount) || amount <= 0 || !targetUser) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **فرمت اشتباه!** نمونه: `انتقال 500` روی پیام کاربر یا `انتقال 500 @ali`', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '🚫 **فرمت اشتباه!**\nمثال: `انتقال 500` رو پیام طرف یا `انتقال 500 @username` ⚡️', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
         }
 
         if (user.user_id === targetUser.user_id) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ نمیتونی به خودت مارک منتقل کنی!', reply_to_message_id: replyMsgId });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **نمی‌توانی به خودت پول منتقل کنی!** 🤡', reply_to_message_id: replyMsgId });
         }
 
         if (user.marks < amount) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **موجودی ناکافی!** این‌قدر مارک نداری!', reply_to_message_id: replyMsgId });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '💸 **موجودی ناکافی!** این مقدار مارک در جیب نداری! ❌', reply_to_message_id: replyMsgId });
         }
 
-        // تاییدیه قبل از انجام
         const keyboard = {
             inline_keyboard: [[
-                { text: '✅ تایید و ارسال', callback_data: `confirm_transfer:${targetUser.user_id}:${amount}` },
-                { text: '❌ لغو', callback_data: 'cancel' }
+                { text: '💎 تایید و واریز 🚀', callback_data: `confirm_transfer:${targetUser.user_id}:${amount}` },
+                { text: '🔥 انصراف ✖️', callback_data: 'cancel' }
             ]]
         };
 
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `⚠️ **تاییدیه نظامی انتقال:**\nآیا مطمئن هستید که می‌خواهید **${amount} مارک** به کاربر **${targetUser.first_name}** منتقل کنید؟`,
+            text: `⚠️ 💸 **تاییدیه انتقال وجه نظامی:** 💸\n\n` +
+                `آیا از انتقال **${amount}** مارک به **${targetUser.first_name}** اطمینان دارید؟ 🤔`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard
         });
     }
 
-    // 6. بازار سیاه
+    // 6. قابلیت جدید: واریز پول به رایشس بانک
+    if (text.startsWith('واریز به بانک')) {
+        const amount = parseInt(text.replace('واریز به بانک', '').trim());
+        if (isNaN(amount) || amount <= 0) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '🚫 **فرمت اشتباه!**\nمثال: `واریز به بانک 1000` 🏦', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+        }
+
+        if (user.marks < amount) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '💸 **موجودی کیف پول شما کافی نیست!**', reply_to_message_id: replyMsgId });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks - amount,
+                bank_balance: (user.bank_balance || 0) + amount
+            })
+        });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🏛 🚀 **سپرده‌گذاری در رایشس بانک با موفقیت انجام شد!** 🚀\n\n` +
+                `💵 **مبلغ واریزی:** **+${amount}** مارک\n` +
+                `🏛 **سپرده جدید بانک:** **${user.bank_balance + amount}** مارک 💎\n` +
+                `💰 **کیف پول باقی‌مانده:** **${user.marks - amount}** مارک⚡️`,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'Markdown'
+        });
+    }
+
+    // 7. بازار سیاه
     if (text === 'بازار سیاه') {
         const keyboard = {
             inline_keyboard: [
-                [{ text: '🔪 بخش سلاح‌ها', callback_data: 'bm_weapons' }, { text: '🛡 بخش لباس و زره', callback_data: 'bm_armors' }],
-                [{ text: '🦅 تفنگ شکاری', callback_data: 'bm_rifle' }]
+                [{ text: '⚔️ اسلحه خانه سنگین 💣', callback_data: 'bm_weapons' }, { text: '🛡 تجهیزات زرهی و دفاعی 🥷', callback_data: 'bm_armors' }],
+                [{ text: '🦅 ارتقای تفنگ شکاری 🎯', callback_data: 'bm_rifle' }]
             ]
         };
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `💀 **به بازار سیاه کاپو خوش آمدید!**\nاینجا قوانین دولتی معنا ندارد. فقط مارک‌های شما ارزش دارد. چه چیزی نیاز داری سرباز؟`,
+            text: `💀 ⚡️ **به بازار سیاه زیرزمینی کاپو خوش آمدید!** ⚡️ 💀\n\n` +
+                `🔥 _اینجا قوانین قانون‌مداران ارزشی ندارد؛ فقط مارک‌های شما حرف اول را می‌زند!_\n` +
+                `چه تجهیزاتی لازم داری رزمنده؟ 🧨`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard
         });
     }
 
-    // 7. تفنگ شکاری
+    // 8. تفنگ شکاری
     if (text === 'تفنگ شکاری') {
         const nextLvl = user.hunting_rifle_level + 1;
         if (nextLvl > 6) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '🦅 تفنگ شکاری شما در حداکثر سطح (سطح ۶) قرار دارد!', reply_to_message_id: replyMsgId });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '🦅 **تفنگ شکاری شما در حداکثر سطح ممکن (سطح ۶ - افسانه‌ای) قرار دارد!** 👑', reply_to_message_id: replyMsgId });
         }
         const cost = RIFLE_LEVELS[nextLvl];
         const keyboard = {
             inline_keyboard: [[
-                { text: `✅ ارتقا به سطح ${nextLvl} (${cost} مارک)`, callback_data: `buy_rifle:${nextLvl}:${cost}` },
-                { text: '❌ لغو', callback_data: 'cancel' }
+                { text: `🚀 ارتقا به سطح ${nextLvl} (${cost} مارک) 💎`, callback_data: `buy_rifle:${nextLvl}:${cost}` },
+                { text: '🔥 انصراف ✖️', callback_data: 'cancel' }
             ]]
         };
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `🦅 **ارتقای تفنگ شکاری:**\nسطح فعلی: **${user.hunting_rifle_level}**\nهزینه ارتقا به سطح **${nextLvl}**: **${cost} مارک**\nآیا تایید می‌کنید؟`,
+            text: `🦅 🎯 **ارتقای سلاح شکاری:**\n\n` +
+                `🔹 سطح کنونی: **${user.hunting_rifle_level}**\n` +
+                `🔸 هزینه ارتقا به سطح **${nextLvl}**: **${cost}** مارک 💸\n\n` +
+                `آیا تصمیم به ارتقا داری سرباز؟ ⚡️`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard
         });
     }
 
-    // 8. دزدی از بانک
+    // 9. دزدی از بانک
     if (text === 'دزدی از بانک') {
         if (user.last_bank_heist) {
             const diffMin = (new Date() - new Date(user.last_bank_heist)) / (1000 * 60);
             if (diffMin < 60) {
-                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🛑 **پلیس‌ها مشکوک شده‌اند!** باید **${Math.ceil(60 - diffMin)} دقیقه** دیگر برای سرقت بعدی صبر کنی!`, reply_to_message_id: replyMsgId });
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🚨 **آژیرهای خطر به صدا درآمده‌اند!**\nپلیس‌ها منطقه را زیر نظر دارند. باید **${Math.ceil(60 - diffMin)} دقیقه** دیگر برای سرقت بعدی صبر کنی! 🕵️‍♂️`, reply_to_message_id: replyMsgId });
             }
         }
 
@@ -357,63 +398,74 @@ async function handleMessage(token, msg) {
 
         const keyboard = {
             inline_keyboard: [[
-                { text: '💥 حمله به بانک!', callback_data: 'confirm_bank_heist' },
-                { text: '❌ عقب‌نشینی', callback_data: 'cancel' }
+                { text: '🧨 شلیک و حمله به بانک! 💣', callback_data: 'confirm_bank_heist' },
+                { text: '🏃‍♂️ عقب‌نشینی ✖️', callback_data: 'cancel' }
             ]]
         };
 
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `🏦 **بررسی عملیات سرقت از بانک:**\n\n⚔️ قدرت ضربه سلاح‌ها: **${power} HP**\n🛡 میزان خون و جلیقه: **${health} HP**\n\n⚠️ آیا از حمله مسلحانه به خزانه بانک مطمئن هستید؟`,
+            text: `🏛 🚨 **اتاق عملیات: نقشه سرقت مسلحانه از بانک مرکزی** 🚨\n\n` +
+                `🗡 قدرت تخریب سلاح‌ها: **${power} HP** 💣\n` +
+                `🛡 میزان جلیقه و استقامت: **${health} HP** 🛡\n\n` +
+                `⚠️ آیا از نفوذ به خزانه محافظت‌شده مطمئن هستید؟ 🔥`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard
         });
     }
 
-    // 9. دزدی از سرباز
+    // 10. دزدی از سرباز
     if (text === 'دزدی از سرباز') {
         if (user.last_soldier_attack) {
             const diffMin = (new Date() - new Date(user.last_soldier_attack)) / (1000 * 60);
             if (diffMin < 10) {
-                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🛑 **شناسایی شده‌ای!** برای حمله بعدی به سربازان **${Math.ceil(10 - diffMin)} دقیقه** صبر کن!`, reply_to_message_id: replyMsgId });
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: `🚨 **ردیابی شده‌ای!** برای حمله به سربازان بعدی **${Math.ceil(10 - diffMin)} دقیقه** کمین کن! 🥷`, reply_to_message_id: replyMsgId });
             }
         }
 
         const keyboard = {
             inline_keyboard: [[
-                { text: '⚔️ جستجو و حمله به سرباز', callback_data: 'confirm_soldier_attack' },
-                { text: '❌ انصراف', callback_data: 'cancel' }
+                { text: '⚔️ ردگیری و شلیک به سرباز 💣', callback_data: 'confirm_soldier_attack' },
+                { text: '✖️ لغو عملیات', callback_data: 'cancel' }
             ]]
         };
 
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `⚔️ **عملیات درگیری شهری:**\nآیا می‌خواهید به نزدیک‌ترین سرباز شناسایی‌شده در منطقه حمله کنید؟`,
+            text: `⚔️ 🩸 **عملیات درگیری خیابانی:** 🩸 ⚔️\n\n` +
+                `آیا می‌خواهی به اولین سرباز شناسایی‌شده در منطقه کمین بزنی و غارتش کنی؟ 🔥`,
             reply_to_message_id: replyMsgId,
             reply_markup: keyboard
         });
     }
 
-    // 10. بانک شخصی و رایشس بانک
+    // 11. بانک شخصی و رایشس بانک
     if (text === 'بانک') {
         const keyboard = {
             inline_keyboard: [
-                [{ text: '💎 سود گرفتن از رایشس بانک', callback_data: 'reichsbank_menu' }],
-                [{ text: '📈 ارتقای رایشس بانک', callback_data: 'upgrade_reichsbank' }]
+                [{ text: '💎 برداشت سود ساعتی رایشس بانک 🚀', callback_data: 'reichsbank_menu' }],
+                [{ text: '💵 واریز 1000 مارک 📥', callback_data: 'quick_deposit_1000' }, { text: '💵 واریز کل جیب 📥', callback_data: 'quick_deposit_all' }],
+                [{ text: '📈 ارتقای سطح رایشس بانک 👑', callback_data: 'upgrade_reichsbank' }]
             ]
         };
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `🏛 **بانک مرکزی و شخصی:**\n\n💰 موجودی کیف پول: **${user.marks} مارک**\n🏦 موجودی بانک: **${user.bank_balance} مارک**\n🎖 سطح رایشس بانک: **${user.reichsbank_level}**`,
+            text: `🏛 💎 **مدیریت سرمایه و رایشس بانک** 💎 🏛\n` +
+                `✨ ────────────────── ✨\n\n` +
+                `💰 موجودی در جیب: **${user.marks}** مارک 💵\n` +
+                `🏛 موجودی در رایشس بانک: **${user.bank_balance}** مارک 🏦\n` +
+                `👑 سطح فعلی رایشس بانک: **سطح ${user.reichsbank_level}**⚡️\n\n` +
+                `💡 _برای واریز مبالغ خاص می‌توانید دستور ` + "`واریز به بانک [مقدار]`" + ` را بفرستید._`,
             reply_to_message_id: replyMsgId,
-            reply_markup: keyboard
+            reply_markup: keyboard,
+            parse_mode: 'Markdown'
         });
     }
 
-    // 11. شکار کردن
+    // 12. شکار کردن
     if (text === 'شکار') {
         if (user.hunting_rifle_level === 0) {
-            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ برای شکار ابتدا باید تفنگ شکاری بخرید! (ارسال کلمه: `تفنگ شکاری`)', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **برای شکار ابتدا باید تفنگ شکاری تهیه کنی!** (ارسال کلمه: `تفنگ شکاری`) 🎯', reply_to_message_id: replyMsgId, parse_mode: 'Markdown' });
         }
 
         const rand = Math.random() * 100;
@@ -436,7 +488,6 @@ async function handleMessage(token, msg) {
             hunted = rand <= 30 ? 'آفت' : 'حشرات موذی';
         }
 
-        // اضافه به قفس
         const existing = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${hunted}`);
         if (existing.length > 0) {
             await dbFetch(`user_inventory?id=eq.${existing[0].id}`, {
@@ -452,34 +503,36 @@ async function handleMessage(token, msg) {
 
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: `🦅 **شکار موفقیت‌آمیز!**\nشما موفق شدید یک **«${hunted}»** شکار کنید. صید شما به قفس منتقل شد.`,
+            text: `🦅 🎯 **شکار موفقیت‌آمیز بود!** 🎯\n\n` +
+                `شما یک **«${hunted}»** نگونسار کردید! 🪵\n` +
+                `📦 صید به قفس منتقل شد.`,
             reply_to_message_id: replyMsgId,
             parse_mode: 'Markdown'
         });
     }
 
-    // 12. قفس شکار
+    // 13. قفس شکار
     if (text === 'قفس') {
         const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_type=eq.trophy`);
         let totalValue = 0;
-        let listText = "🪵 **محتویات قفس شکار شما:**\n\n";
+        let listText = "🪵 🦅 **محتویات قفس شکار شما:** 🦅 🪵\n✨ ────────────────── ✨\n\n";
 
         inv.forEach(i => {
             const val = (TROPHIES[i.item_name] || 0) * i.quantity;
             totalValue += val;
-            listText += `• **${i.item_name}**: ${i.quantity} عدد (ارزش هر کدام: ${TROPHIES[i.item_name]} | کل: ${val})\n`;
+            listText += `🔹 **${i.item_name}**: ${i.quantity} عدد (ارزش هرکدام: ${TROPHIES[i.item_name]} | کل: ${val} 💎)\n`;
         });
 
-        listText += `\n💵 **ارزش کل صیدها:** **${totalValue} مارک**`;
+        listText += `\n💵 **ارزش مجموع صیدها:** **${totalValue}** مارک 💸`;
 
         const keyboard = {
-            inline_keyboard: [[{ text: '💰 فروش شکار', callback_data: 'sell_trophies_prompt' }]]
+            inline_keyboard: [[{ text: '💎 چگونگی فروش صیدها 🚀', callback_data: 'sell_trophies_prompt' }]]
         };
 
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: listText, reply_to_message_id: replyMsgId, reply_markup: keyboard, parse_mode: 'Markdown' });
     }
 
-    // 13. دستور فروش دستوری (مثلاً: فروش 6 دورگه)
+    // 14. دستور فروش دستوری (مثلاً: فروش 6 دورگه)
     if (text.startsWith('فروش ')) {
         const parts = text.split(' ');
         if (parts.length >= 3) {
@@ -505,12 +558,14 @@ async function handleMessage(token, msg) {
 
                     return sendTg(token, 'sendMessage', {
                         chat_id: chatId,
-                        text: `✅ **فروش با موفقیت انجام شد!**\nتعداد **${count}** عدد **${trophyName}** فروخته شد.\n💰 دریافت شد: **+${earned} مارک**`,
+                        text: `🎉 💵 **معامله سودآور انجام شد!** 💵 🎉\n\n` +
+                            `تعداد **${count}** عدد **${trophyName}** فروخته شد.\n` +
+                            `💎 سود به دست آمده: **+${earned}** مارک 🚀`,
                         reply_to_message_id: replyMsgId,
                         parse_mode: 'Markdown'
                     });
                 } else {
-                    return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ این تعداد از این نوع شکار در قفس ندارید!', reply_to_message_id: replyMsgId });
+                    return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ **این تعداد از این نوع شکار در قفس نداری!** 🚫', reply_to_message_id: replyMsgId });
                 }
             }
         }
@@ -524,7 +579,29 @@ async function handleCallback(token, cb) {
     const data = cb.data;
 
     if (data === 'cancel') {
-        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '❌ **عملیات توسط کاربر لغو شد.**' });
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '✖️ **عملیات با دستور رزمنده لغو شد.**' });
+    }
+
+    // سریع واریز 1000 یا کل پول به رایشس بانک
+    if (data === 'quick_deposit_1000' || data === 'quick_deposit_all') {
+        let amount = data === 'quick_deposit_1000' ? 1000 : user.marks;
+        if (amount <= 0 || user.marks < amount) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ موجودی جیب کافی نیست!', show_alert: true });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({
+                marks: user.marks - amount,
+                bank_balance: (user.bank_balance || 0) + amount
+            })
+        });
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `🏛 🚀 **واریز انجام شد!**\nمبلغ **${amount}** مارک به رایشس بانک منتقل شد.\n🏦 موجودی بانک: **${(user.bank_balance || 0) + amount}** مارک`
+        });
     }
 
     // تایید انتقال مارک
@@ -534,7 +611,7 @@ async function handleCallback(token, cb) {
         const target = await dbFetch(`users?user_id=eq.${targetId}`);
 
         if (target.length === 0 || user.marks < amount) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: 'خطا در انجام معامله!', show_alert: true });
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ خطا! موجودی شما کافی نیست.', show_alert: true });
         }
 
         await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - amount }) });
@@ -542,37 +619,37 @@ async function handleCallback(token, cb) {
 
         sendTg(token, 'sendMessage', {
             chat_id: targetId,
-            text: `📩 **اعلان واریزی:**\nکاربر **${user.first_name}** مقدار **${amount} مارک** به حساب شما واریز کرد.`
+            text: `📩 💵 **اعلان واریزی غنیمت!**\nکاربر **${user.first_name}** مقدار **${amount}** مارک به حساب شما واریز کرد. 🚀`
         });
 
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `✅ **انتقال موفقیت‌آمیز!**\nمقدار **${amount} مارک** با موفقیت به **${target[0].first_name}** منتقل شد.`
+            text: `✅ 🚀 **انتقال موفقیت‌آمیز!**\nمقدار **${amount}** مارک با موفقیت به **${target[0].first_name}** منتقل گردید.`
         });
     }
 
     // بازار سیاه - لیست سلاح‌ها
     if (data === 'bm_weapons') {
-        let text = "🔪 **لیست سلاح‌های بازار سیاه:**\n\n";
+        let text = "⚔️ 💣 **تسلیحات نظامی بازار سیاه:** 💣 ⚔️\n\n";
         const buttons = [];
         Object.keys(WEAPONS).forEach(w => {
-            text += `• **${w}**: ${WEAPONS[w].price} مارک (${WEAPONS[w].damage} HP)\n`;
-            buttons.push([{ text: `خرید ${w} (${WEAPONS[w].price} مارک)`, callback_data: `buy_item:weapon:${w}` }]);
+            text += `🔹 **${w}**: ${WEAPONS[w].price} مارک | قدرت: ${WEAPONS[w].damage} HP 💥\n`;
+            buttons.push([{ text: `خرید ${w} (${WEAPONS[w].price} مارک) 🗡`, callback_data: `buy_item:weapon:${w}` }]);
         });
-        buttons.push([{ text: 'بازگشت', callback_data: 'cancel' }]);
+        buttons.push([{ text: '🔙 بازگشت', callback_data: 'cancel' }]);
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text, reply_markup: { inline_keyboard: buttons }, parse_mode: 'Markdown' });
     }
 
     // بازار سیاه - لیست جلیقه‌ها
     if (data === 'bm_armors') {
-        let text = "🛡 **لیست لباس و زره‌های بازار سیاه:**\n\n";
+        let text = "🛡 🥷 **تجهیزات دفاعی بازار سیاه:** 🥷 🛡\n\n";
         const buttons = [];
         Object.keys(ARMORS).forEach(a => {
-            text += `• **${a}**: ${ARMORS[a].price} مارک (+${ARMORS[a].health} HP)\n`;
-            buttons.push([{ text: `خرید ${a} (${ARMORS[a].price} مارک)`, callback_data: `buy_item:armor:${a}` }]);
+            text += `🔹 **${a}**: ${ARMORS[a].price} مارک | زره: +${ARMORS[a].health} HP 🛡\n`;
+            buttons.push([{ text: `خرید ${a} (${ARMORS[a].price} مارک) 🥷`, callback_data: `buy_item:armor:${a}` }]);
         });
-        buttons.push([{ text: 'بازگشت', callback_data: 'cancel' }]);
+        buttons.push([{ text: '🔙 بازگشت', callback_data: 'cancel' }]);
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text, reply_markup: { inline_keyboard: buttons }, parse_mode: 'Markdown' });
     }
 
@@ -582,7 +659,7 @@ async function handleCallback(token, cb) {
         const item = type === 'weapon' ? WEAPONS[name] : ARMORS[name];
 
         if (user.marks < item.price) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ مارک کافی نداری سرباز!', show_alert: true });
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ موجودی کافی نداری سرباز!', show_alert: true });
         }
 
         await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - item.price }) });
@@ -594,7 +671,7 @@ async function handleCallback(token, cb) {
             await dbFetch(`user_inventory`, { method: 'POST', body: JSON.stringify({ user_id: user.user_id, item_type: type, item_name: name, quantity: 1 }) });
         }
 
-        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `✅ آیتم **«${name}»** با موفقیت خریداری و به تجهیزات شما اضافه شد.` });
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `🎉 ⚔️ تجهیزات **«${name}»** خریداری شد و به انبار تسلیحات اضافه گردید.` });
     }
 
     // ارتقای تفنگ شکاری
@@ -612,7 +689,7 @@ async function handleCallback(token, cb) {
             body: JSON.stringify({ marks: user.marks - cost, hunting_rifle_level: targetLvl })
         });
 
-        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `✅ تفنگ شکاری شما با موفقیت به **سطح ${targetLvl}** ارتقا یافت.` });
+        return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `🎯 🚀 تفنگ شکاری شما با موفقیت به **سطح ${targetLvl}** ارتقا پیدا کرد.` });
     }
 
     // انجام عملیات حمله به بانک
@@ -655,7 +732,10 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `💥 **نتیجه حمله به بانک (خزانه: ${bankVault} مارک):**\n\n📉 تجهیزات آسیب‌دیده: **${lostVal} مارک**\n💵 غنیمت خالص به‌دست‌آمده: **+${netProfit} مارک**\n💰 کل دارایی جدید: **${user.marks + netProfit} مارک**`
+            text: `💥 💣 **نتیجه سرقت مسلحانه از بانک (خزانه: ${bankVault} مارک):** 💣 💥\n\n` +
+                `📉 آسیب به تجهیزات: **${lostVal}** مارک\n` +
+                `💎 غنیمت و پول نقد به دست آمده: **+${netProfit}** مارک 🚀\n` +
+                `💰 دارایی فعلی جیب: **${user.marks + netProfit}** مارک 💸`
         });
     }
 
@@ -663,7 +743,7 @@ async function handleCallback(token, cb) {
     if (data === 'confirm_soldier_attack') {
         const opponents = await dbFetch(`users?user_id=neq.${user.user_id}&limit=10`);
         if (opponents.length === 0) {
-            return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '❌ هیچ سربازی در منطقه جهت درگیری یافت نشد!' });
+            return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '❌ هیچ سربازی در محدوده عملیاتی جهت درگیری یافت نشد!' });
         }
 
         const target = opponents[Math.floor(Math.random() * opponents.length)];
@@ -687,16 +767,17 @@ async function handleCallback(token, cb) {
             })
         });
 
-        // ارسال پیام به قربانی
         sendTg(token, 'sendMessage', {
             chat_id: target.user_id,
-            text: `⚠️ **اعلا‌ن جنگ!**\nسرباز **${user.first_name}** به شما حمله کرد!\nنتیجه درگیری: شما فرار کردید و خسارت جزئی دیدید.`
+            text: `🚨 ⚔️ **اعلام هشدار درگیری!** ⚔️ 🚨\nسرباز **${user.first_name}** به سنگر شما شبیخون زد!\nشما به سختی عقب‌نشینی کردید.`
         });
 
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `⚔️ **نتیجه نبرد با ${target.first_name}:**\n${isWinner ? '🎉 پیروز شدید!' : '💔 شکست خوردید اما غنیمت جمع کردید!'}\n💰 سود شما از درگیری: **+${gain} مارک**`
+            text: `⚔️ 🩸 **نتیجه نبرد خیابانی با ${target.first_name}:**\n\n` +
+                `${isWinner ? '🎉 👑 پیروز شدید و منطقه را فتح کردید!' : '💔 🩸 عقب‌نشینی کردید اما غنیمت برداشتید!'}\n` +
+                `💎 غنیمت جنگی شما: **+${gain}** مارک 🚀`
         });
     }
 
@@ -728,26 +809,30 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `🏛 **به رایشس بانک خوش آمدید!**\n\nسرمایه شما در رایشس بانک: **${user.bank_balance} مارک**\nسود ساعتی فعال: **${rate}%**\nسود تعلق گرفته (${hours} ساعت): **+${profit} مارک**\n\nمبلغ سود به کیف پول اصلی شما اضافه شد.`
+            text: `🏛 👑 **به خزانه اصلی رایشس بانک خوش آمدید!** 👑 🏛\n\n` +
+                `🏦 کل سرمایه موجود در بانک: **${user.bank_balance}** مارک\n` +
+                `📈 نرخ سود ساعتی شما: **${rate}%**\n` +
+                `💎 سود محاسبه شده (${hours} ساعت): **+${profit}** مارک 🚀\n\n` +
+                `✅ _مبلغ سود مستقیم به جیب شما واریز شد._`
         });
     }
 
     // ارتقای سطح رایشس بانک
     if (data === 'upgrade_reichsbank') {
         if (user.bank_balance < 6000) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ برای ارتقای رایشس بانک باید حداقل ۶۰۰۰ مارک در بانک داشته باشید!', show_alert: true });
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ برای ارتقای رایشس بانک باید حداقل ۶۰۰۰ مارک در سپرده بانک داشته باشید!', show_alert: true });
         }
 
         const costs = { 0: 2500, 1: 3200, 2: 4000, 3: 5200, 4: 6000, 5: 13000 };
         const nextLvl = user.reichsbank_level + 1;
 
         if (nextLvl > 6) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: 'رایشس بانک شما در حداکثر سطح قرار دارد!', show_alert: true });
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '👑 رایشس بانک شما در حداکثر سطح قرار دارد!', show_alert: true });
         }
 
         const cost = costs[user.reichsbank_level];
         if (user.marks < cost) {
-            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: `❌ مارک کافی در کیف پول شخصی نداری! هزینه: ${cost} مارک`, show_alert: true });
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: `❌ مارک کافی در جیب نداری! هزینه: ${cost} مارک`, show_alert: true });
         }
 
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
@@ -761,7 +846,9 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `✅ **رایشس بانک ارتقا یافت!**\nسطح جدید: **سطح ${nextLvl}**\nضریب سود ساعتی جدید شما فعال شد.`
+            text: `🏛 👑 **رایشس بانک با موفقیت ارتقا یافت!** 👑\n\n` +
+                `🌟 سطح جدید: **سطح ${nextLvl}**\n` +
+                `🚀 ضریب سود پرداختی شما به شدت افزایش یافت!`
         });
     }
 
@@ -770,9 +857,11 @@ async function handleCallback(token, cb) {
         return sendTg(token, 'editMessageText', {
             chat_id: chatId,
             message_id: cb.message.message_id,
-            text: `💰 **راهنمای فروش شکار:**\nبرای فروش صیدهای خود کلمه زیر را ارسال کنید:\n\n` +
-                `` + `فروش [تعداد] [نام شکار]` + `` + `\n\nمثال:\n` + `فروش 6 دورگه`
+            text: `💎 💵 **راهنمای فروش صیدهای قفس:** 💵 💎\n\n` +
+                `برای فروش شکارها عبارت زیر را ارسال نمایید:\n\n` +
+                ` ` + `فروش [تعداد] [نام شکار]` + ` \n\n` +
+                `📌 **مثال:**\n` +
+                ` ` + `فروش 6 دورگه`
         });
     }
 }
- 
