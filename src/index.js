@@ -29,11 +29,26 @@ async function dbFetch(endpoint, options = {}) {
 async function getOrCreateUser(tgUser) {
     const data = await dbFetch(`users?user_id=eq.${tgUser.id}`);
     if (data.length > 0) {
+        let currentMaxLevel = Math.max(data[0].level || 1, data[0].max_level || 1);
+        let updates = {};
+
         if (tgUser.username && data[0].username !== tgUser.username) {
-            await dbFetch(`users?user_id=eq.${tgUser.id}`, {
+            updates.username = tgUser.username;
+            updates.first_name = tgUser.first_name;
+        }
+
+        // تضمین این که لول هیچ‌وقت پایین نیاید
+        if (data[0].level < currentMaxLevel || data[0].max_level !== currentMaxLevel) {
+            updates.level = currentMaxLevel;
+            updates.max_level = currentMaxLevel;
+        }
+
+        if (Object.keys(updates).length > 0) {
+            const patched = await dbFetch(`users?user_id=eq.${tgUser.id}`, {
                 method: 'PATCH',
-                body: JSON.stringify({ username: tgUser.username, first_name: tgUser.first_name })
+                body: JSON.stringify(updates)
             });
+            return patched[0];
         }
         return data[0];
     }
@@ -46,7 +61,9 @@ async function getOrCreateUser(tgUser) {
         username: tgUser.username || null,
         first_name: tgUser.first_name || "سرباز",
         marks: 0,
+        total_marks_collected: 0,
         level: 1,
+        max_level: 1,
         bank_balance: 0,
         reichsbank_level: 0,
         site_password: randomPassword
@@ -62,6 +79,36 @@ async function getUserByUsername(username) {
     const cleanUsername = username.replace('@', '').trim();
     const data = await dbFetch(`users?username=eq.${cleanUsername}`);
     return data[0] || null;
+}
+
+// محاسبه رتبه کاربر از نظر مجموع مارک‌های جمع‌آوری شده
+async function getUserRank(totalMarksCollected) {
+    const higherUsers = await dbFetch(`users?total_marks_collected=gt.${totalMarksCollected}&select=user_id`, {
+        headers: { "Prefer": "count=exact" }
+    });
+    // اگر در هدر ریسپانس تعداد بازنگردد، بر اساس طول آرایه محاسبه می‌شود
+    const rank = (higherUsers && higherUsers.length ? higherUsers.length : 0) + 1;
+    return rank;
+}
+
+// تابع برای افزایش مارک و ثبت در مجموع مارک‌های جمع‌شده + مدیریت لول
+async function addMarksToUser(user, amount) {
+    if (amount <= 0) return user;
+    
+    const newMarks = user.marks + amount;
+    const newTotal = (user.total_marks_collected || user.marks || 0) + amount;
+    const currentMaxLvl = Math.max(user.level || 1, user.max_level || 1);
+
+    const patched = await dbFetch(`users?user_id=eq.${user.user_id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+            marks: newMarks,
+            total_marks_collected: newTotal,
+            level: currentMaxLvl,
+            max_level: currentMaxLvl
+        })
+    });
+    return patched[0] || user;
 }
 
 // ------------------- GAME CONSTANTS -------------------
@@ -358,10 +405,10 @@ async function handleMessage(token, msg) {
         else if (user.level === 5) reward = getRandomInt(420, 500);
         else if (user.level === 6) reward = 1000;
 
+        await addMarksToUser(user, reward);
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
             body: JSON.stringify({
-                marks: user.marks + reward,
                 last_dorood: new Date().toISOString(),
                 total_doroods: (user.total_doroods || 0) + 1
             })
@@ -377,7 +424,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 3. دریافت آمار (به‌روزرسانی شده با لقب)
+    // 3. دریافت آمار (به‌روزرسانی شده با رتبه، مجموع مارک و ارجاع لیدربورد به سایت)
     if (text === 'آمار' || text === 'امار' || text === 'آمارش' || text === 'امارش' || text.startsWith('آمار @') || text.startsWith('امار @')) {
         let targetUser = user;
 
@@ -399,6 +446,9 @@ async function handleMessage(token, msg) {
             if (ARMORS[i.item_name]) health += ARMORS[i.item_name].health * i.quantity;
         });
 
+        const totalCollected = targetUser.total_marks_collected || targetUser.marks || 0;
+        const rank = await getUserRank(totalCollected);
+
         const nickText = targetUser.nickname ? `🏷 <b>لقب:</b> ${targetUser.nickname}\n` : '';
 
         const statsText = `📜 ✨ <b>شناسنامه و آمار نظامی:</b> ✨ 📜\n` +
@@ -408,6 +458,8 @@ async function handleMessage(token, msg) {
             `🎖 <b>مقام نظامی:</b> ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
             `💎 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
             `🏛 <b>سپرده رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
+            `🔥 <b>مجموع کل مارک‌های دریافتی:</b> <b>${totalCollected}</b> مارک ${MARK_ANIM}\n` +
+            `🏆 <b>رتبه در ثروت‌آفرینی:</b> <b>نفر ${rank}#</b> در سراسر رایش 🥇\n\n` +
             `🗡 <b>قدرت تهاجمی:</b> <b>${power}</b> HP 💣\n` +
             `🛡 <b>قدرت دفاعی (زره):</b> <b>${health}</b> HP 🛡\n` +
             `🦅 <b>سطح تفنگ شکاری:</b> <b>${targetUser.hunting_rifle_level || 0}</b> 🎯\n` +
@@ -415,7 +467,10 @@ async function handleMessage(token, msg) {
             `⚠️ <b>سابقه جریمه:</b> <b>${targetUser.total_punishments || 0}</b> بار 🚨\n` +
             `⚔️ <b>تعداد نبردها:</b> <b>${targetUser.total_attacks || 0}</b> جنگ 💥\n` +
             `🏆 <b>برد در دزدی از سرباز:</b> <b>${targetUser.soldier_wins || 0}</b> بار ✅\n` +
-            `💀 <b>باخت در دزدی از سرباز:</b> <b>${targetUser.soldier_losses || 0}</b> بار ❌`;
+            `💀 <b>باخت در دزدی از سرباز:</b> <b>${targetUser.soldier_losses || 0}</b> بار ❌\n\n` +
+            `🌐 <b>سامانه مرکزی رایش بزرگ:</b>\n` +
+            ` جهت مشاهده تالار افتخارات، رده‌بندی جنگی، ثروتمندترین رزمندگان و برترین گردان‌ها به وب‌سایت رسمی مراجعه فرمایید:\n` +
+            `🔗 Pishwabot.vercel.app`;
 
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
     }
@@ -493,12 +548,11 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 6. بازار سیاه
+    // 6. بازار سیاه (بخش تفنگ شکاری حذف شده)
     if (text === 'بازار سیاه') {
         const keyboard = {
             inline_keyboard: [
-                [{ text: '⚔️ اسلحه خانه سنگین 💣', callback_data: 'bm_weapons' }, { text: '🛡 تجهیزات زرهی و دفاعی 🥷', callback_data: 'bm_armors' }],
-                [{ text: '🦅 ارتقای تفنگ شکاری 🎯', callback_data: 'bm_rifle' }]
+                [{ text: '⚔️ اسلحه خانه سنگین 💣', callback_data: 'bm_weapons' }, { text: '🛡 تجهیزات زرهی و دفاعی 🥷', callback_data: 'bm_armors' }]
             ]
         };
         return sendTg(token, 'sendMessage', {
@@ -512,7 +566,7 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 7. تفنگ شکاری
+    // 7. تفنگ شکاری (خارج از بازار سیاه هنوز قابل ارتقا است)
     if (text === 'تفنگ شکاری') {
         const nextLvl = (user.hunting_rifle_level || 0) + 1;
         if (nextLvl > 6) {
@@ -656,11 +710,11 @@ async function handleMessage(token, msg) {
         let isWinner = uPower >= tPower;
         let gain = isWinner ? Math.floor(uPower * 0.02) : Math.floor(uPower * 0.011);
 
-        // به‌روزرسانی آمار و موجودی
+        // به‌روزرسانی آمار و موجودی (با ثبت مارک کل)
+        await addMarksToUser(user, gain);
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
             body: JSON.stringify({
-                marks: user.marks + gain,
                 last_soldier_attack: new Date().toISOString(),
                 total_attacks: (user.total_attacks || 0) + 1,
                 soldier_wins: (user.soldier_wins || 0) + (isWinner ? 1 : 0),
@@ -826,10 +880,7 @@ async function handleMessage(token, msg) {
                         await dbFetch(`user_inventory?id=eq.${inv[0].id}`, { method: 'DELETE' });
                     }
 
-                    await dbFetch(`users?user_id=eq.${user.user_id}`, {
-                        method: 'PATCH',
-                        body: JSON.stringify({ marks: user.marks + earned })
-                    });
+                    await addMarksToUser(user, earned);
 
                     return sendTg(token, 'sendMessage', {
                         chat_id: chatId,
@@ -887,6 +938,23 @@ async function handleCallback(token, cb) {
         return sendHelpMessage(token, chatId, cb.message.message_id, cb.message.chat.type === 'private');
     }
 
+    // راهنمای فروش صیدهای قفس
+    if (data === 'sell_trophies_prompt') {
+        const guideText = `💡 📖 <b>راهنمای فروش صیدهای قفس:</b>\n\n` +
+            `برای فروش صیدها در گروه کافیست از دستور زیر استفاده کنید:\n\n` +
+            `<code>فروش [تعداد] [نام شکار]</code>\n\n` +
+            `📝 <b>مثال‌ها:</b>\n` +
+            `🔹 <code>فروش 1 دورگه</code>\n` +
+            `🔹 <code>فروش 2 انگل</code>\n` +
+            `🔹 <code>فروش 5 آفت</code>`;
+
+        return sendTg(token, 'answerCallbackQuery', {
+            callback_query_id: cb.id,
+            text: guideText.replace(/<[^>]*>?/gm, ''), // نمایش به صورت پاپ آپ هشدار یا آلرت
+            show_alert: true
+        });
+    }
+
     if (data === 'quick_deposit_1000' || data === 'quick_deposit_all') {
         let amount = data === 'quick_deposit_1000' ? 1000 : user.marks;
         if (amount <= 0 || user.marks < amount) {
@@ -919,7 +987,7 @@ async function handleCallback(token, cb) {
         }
 
         await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: user.marks - amount }) });
-        await dbFetch(`users?user_id=eq.${targetId}`, { method: 'PATCH', body: JSON.stringify({ marks: target[0].marks + amount }) });
+        await addMarksToUser(target[0], amount);
 
         const senderNotice = `💸 <b>گزارش انتقال وجه:</b>\nشما مقدار <b>${amount}</b> مارک ${MARK_ANIM} به حساب <b>${target[0].first_name}</b> واریز کردید.`;
         const receiverNotice = `💸 <b>واریز جدید:</b>\nمقدار <b>${amount}</b> مارک ${MARK_ANIM} از طرف <b>${user.first_name}</b> به حساب شما واریز شد! 🚀`;
@@ -1021,10 +1089,10 @@ async function handleCallback(token, cb) {
         const lostVal = Math.floor(totalEquipVal * lossRatio);
         const netProfit = Math.floor(lostVal * profitMult);
 
+        await addMarksToUser(user, netProfit);
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
             body: JSON.stringify({
-                marks: user.marks + netProfit,
                 last_bank_heist: new Date().toISOString(),
                 total_attacks: (user.total_attacks || 0) + 1
             })
@@ -1066,10 +1134,10 @@ async function handleCallback(token, cb) {
         let isWinner = uPower >= tPower;
         let gain = isWinner ? Math.floor(uPower * 0.02) : Math.floor(uPower * 0.011);
 
+        await addMarksToUser(user, gain);
         await dbFetch(`users?user_id=eq.${user.user_id}`, {
             method: 'PATCH',
             body: JSON.stringify({
-                marks: user.marks + gain,
                 last_soldier_attack: new Date().toISOString(),
                 total_attacks: (user.total_attacks || 0) + 1,
                 soldier_wins: (user.soldier_wins || 0) + (isWinner ? 1 : 0),
@@ -1115,10 +1183,10 @@ async function handleCallback(token, cb) {
         const profit = Math.floor((user.bank_balance / 100) * rate * hours);
 
         if (profit > 0) {
+            await addMarksToUser(user, profit);
             await dbFetch(`users?user_id=eq.${user.user_id}`, {
                 method: 'PATCH',
                 body: JSON.stringify({
-                    marks: user.marks + profit,
                     last_reichsbank_claim: now.toISOString()
                 })
             });
