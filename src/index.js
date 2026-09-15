@@ -2,12 +2,23 @@
  * PishvaBot - Telegram Bot Engine on Cloudflare Workers & Supabase
  * Fixed Version with Custom Titles, Titles/Ranks logic, Permanent PV Keyboard & Private Notifications
  *
- * تغییرات این نسخه:
+ * تغییرات نسخه قبلی:
  * 1) بات فقط در گروه‌های با حداقل ۱۰ عضو فعال است.
  * 2) دکمه «رمز سایت» به «رمز و نام کاربری سایت» تغییر کرد و امکان تغییر نام کاربری اضافه شد.
  * 3) هنگام ثبت‌نام، نام کاربری و رمز عبور رندوم به‌صورت پیش‌فرض ثبت می‌شود.
  * 4) امکان برداشت مارک از رایشس بانک به جیب شخصی اضافه شد.
  * 5) دکمه‌های شیشه‌ای فقط توسط همان کاربری که ربات به او پاسخ داده قابل استفاده هستند.
+ *
+ * تغییرات این نسخه:
+ * 6) دکمه ورود به گروه رایش بزرگ روی پیام اخطار «کمتر از ۱۰ عضو».
+ * 7) پیام خوش‌آمدگویی و منشن شدن اعضای جدید گروه.
+ * 8) دستور «سایت» برای معرفی و لینک سایت.
+ * 9) قابلیت دزدی از بقیه با منشن (@) و شرط‌بندی، همراه با تایید ۱۵ دقیقه‌ای طرف مقابل.
+ * 10) یکتا بودن نام کاربری سایت (بدون حساسیت به بزرگی/کوچکی حروف) هنگام ثبت‌نام و تغییر نام کاربری.
+ * 11) قابلیت خرید و ارتقای «شکارچی» شخصی (شکار خودکار ساعتی) برای سطح ۳ به بالا.
+ * 12) دکمه‌های «گروه رایش بزرگ» و «کانال اطلاع‌رسانی» در راهنما.
+ * 13) ارسال اعلان همگانی به همه پیوی‌ها / همه گروه‌ها با رمز عبور، به صورت دسته‌ای (۳۰ تایی هر ۵ ثانیه).
+ * 14) ثبت آمار تعداد پیام هر گروه (هفتگی/ماهانه/کل) و نمایش فعال‌ترین گروه‌ها.
  */
 
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
@@ -18,6 +29,14 @@ const MARK_ANIM = '<tg-emoji emoji-id="5897862946431701391">🪙</tg-emoji>';
 
 // حداقل تعداد اعضای لازم برای فعال بودن بات در گروه
 const MIN_GROUP_MEMBERS = 10;
+
+// لینک گروه رایش بزرگ و کانال اطلاع‌رسانی
+const GROUP_LINK = 'https://t.me/pishwa_group';
+const CHANNEL_LINK = 'https://t.me/pishwa_channel';
+
+// رمزهای عبور اعلان همگانی
+const BROADCAST_PV_PASSWORD = '11111111';
+const BROADCAST_GROUP_PASSWORD = '22222222';
 
 // ------------------- SUPABASE CLIENT UTILS -------------------
 async function dbFetch(endpoint, options = {}) {
@@ -51,6 +70,20 @@ function generateRandomPassword() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+// تولید نام کاربری رندوم که تضمین می‌کند از قبل در دیتابیس وجود ندارد (بدون حساسیت به بزرگی/کوچکی حروف)
+async function generateUniqueUsername() {
+    let username;
+    let exists = true;
+    let attempts = 0;
+    while (exists && attempts < 15) {
+        username = generateRandomUsername();
+        const check = await dbFetch(`users?site_username=ilike.${username}`);
+        exists = check.length > 0;
+        attempts++;
+    }
+    return username;
+}
+
 async function getOrCreateUser(tgUser) {
     const data = await dbFetch(`users?user_id=eq.${tgUser.id}`);
     if (data.length > 0) {
@@ -78,8 +111,8 @@ async function getOrCreateUser(tgUser) {
         return data[0];
     }
 
-    // تولید نام کاربری و رمز عبور رندوم پیش‌فرض برای کاربر جدید
-    const randomUsername = generateRandomUsername();
+    // تولید نام کاربری یکتا و رمز عبور رندوم پیش‌فرض برای کاربر جدید
+    const randomUsername = await generateUniqueUsername();
     const randomPassword = generateRandomPassword();
 
     const newUser = {
@@ -93,7 +126,9 @@ async function getOrCreateUser(tgUser) {
         bank_balance: 0,
         reichsbank_level: 0,
         site_username: randomUsername,
-        site_password: randomPassword
+        site_password: randomPassword,
+        hunter_level: 0,
+        started_pv: false
     };
     const created = await dbFetch(`users`, {
         method: 'POST',
@@ -207,6 +242,34 @@ const TROPHIES = {
     'حشرات موذی': 4000
 };
 
+// هزینه خرید/ارتقای شکارچی شخصی در هر لول
+const HUNTER_LEVELS = {
+    1: 20000,
+    2: 40000,
+    3: 80000,
+    4: 160000,
+    5: 340000,
+    6: 700000
+};
+
+// توان شکار خودکار شکارچی در هر لول (به صورت رندوم بین min و max در هر ساعت)
+const HUNTER_CATCH_CONFIG = {
+    1: { min: 4, max: 7, item: 'انگل' },
+    2: { min: 14, max: 24, item: 'انگل' },
+    3: { min: 24, max: 30, item: 'انگل' },
+    4: { min: 30, max: 35, item: 'انگل' },
+    5: { min: 35, max: 40, item: 'انگل' },
+    6: { min: 10, max: 20, item: 'حشرات موذی' }
+};
+
+// حداقل درجه نظامی لازم برای خرید شکارچی
+const HUNTER_MIN_RANK_LEVEL = 3;
+
+// کول‌داون حمله با منشن (@) به دقیقه
+const MENTION_ATTACK_COOLDOWN_MIN = 30;
+// زمان معتبر بودن چالش دزدی با منشن به دقیقه
+const DUEL_EXPIRY_MIN = 15;
+
 // ------------------- HELPER FUNCTIONS -------------------
 function getTitle(level) {
     if (level === 6) return "قائم مقام پیشوا";
@@ -272,6 +335,140 @@ function getPvReplyKeyboard() {
     };
 }
 
+// دکمه‌های شیشه‌ای گروه رایش بزرگ و کانال اطلاع‌رسانی (برای استفاده کنار راهنما و..)
+function getCommunityLinksKeyboard() {
+    return {
+        inline_keyboard: [[
+            { text: '🏛 گروه رایش بزرگ', url: GROUP_LINK },
+            { text: '📢 کانال اطلاع‌رسانی', url: CHANNEL_LINK }
+        ]]
+    };
+}
+
+// ------------------- گروه‌ها: ثبت آمار فعالیت -------------------
+async function trackGroupActivity(chat) {
+    const chatId = chat.id;
+    const now = new Date();
+    const existing = await dbFetch(`groups?chat_id=eq.${chatId}`);
+
+    if (existing.length === 0) {
+        await dbFetch(`groups`, {
+            method: 'POST',
+            body: JSON.stringify({
+                chat_id: chatId,
+                title: chat.title || '',
+                username: chat.username || null,
+                messages_total: 1,
+                messages_week: 1,
+                messages_month: 1,
+                week_reset_at: now.toISOString(),
+                month_reset_at: now.toISOString()
+            })
+        });
+        return;
+    }
+
+    const g = existing[0];
+    const updates = {
+        messages_total: (g.messages_total || 0) + 1,
+        title: chat.title || g.title,
+        username: chat.username || g.username
+    };
+
+    const weekDiffDays = (now - new Date(g.week_reset_at)) / (1000 * 60 * 60 * 24);
+    if (weekDiffDays >= 7) {
+        updates.messages_week = 1;
+        updates.week_reset_at = now.toISOString();
+    } else {
+        updates.messages_week = (g.messages_week || 0) + 1;
+    }
+
+    const monthDiffDays = (now - new Date(g.month_reset_at)) / (1000 * 60 * 60 * 24);
+    if (monthDiffDays >= 30) {
+        updates.messages_month = 1;
+        updates.month_reset_at = now.toISOString();
+    } else {
+        updates.messages_month = (g.messages_month || 0) + 1;
+    }
+
+    await dbFetch(`groups?chat_id=eq.${chatId}`, { method: 'PATCH', body: JSON.stringify(updates) });
+}
+
+function formatGroupLine(g, index) {
+    const link = g.username ? `https://t.me/${g.username}` : 'بدون لینک عمومی';
+    return `${index + 1}. <b>${g.title || 'بدون‌نام'}</b>\n   🔗 ${link}`;
+}
+
+// ------------------- اعلان همگانی (Broadcast) -------------------
+async function sendInBatches(token, chatIds, text) {
+    const batchSize = 30;
+    for (let i = 0; i < chatIds.length; i += batchSize) {
+        const batch = chatIds.slice(i, i + batchSize);
+        await Promise.all(batch.map(id =>
+            sendTg(token, 'sendMessage', { chat_id: id, text, parse_mode: 'HTML' }).catch(() => {})
+        ));
+        if (i + batchSize < chatIds.length) {
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    }
+}
+
+async function broadcastToAllPV(token, text) {
+    const users = await dbFetch(`users?started_pv=eq.true&select=user_id`);
+    const ids = users.map(u => u.user_id);
+    await sendInBatches(token, ids, text);
+}
+
+async function broadcastToAllGroups(token, text) {
+    const groups = await dbFetch(`groups?select=chat_id`);
+    const ids = groups.map(g => g.chat_id);
+    await sendInBatches(token, ids, text);
+}
+
+// ------------------- شکارچی: پردازش دوره‌ای شکار خودکار -------------------
+async function processHunters(token) {
+    const now = new Date();
+    const hunters = await dbFetch(`users?hunter_level=gt.0&select=user_id,hunter_level,hunter_last_collect,first_name`);
+
+    for (const h of hunters) {
+        if (!h.hunter_last_collect) continue;
+        const last = new Date(h.hunter_last_collect);
+        const diffHours = Math.floor((now - last) / (1000 * 60 * 60));
+        if (diffHours < 1) continue;
+
+        const cfg = HUNTER_CATCH_CONFIG[h.hunter_level];
+        if (!cfg) continue;
+
+        const count = getRandomInt(cfg.min, cfg.max);
+
+        const existing = await dbFetch(`user_inventory?user_id=eq.${h.user_id}&item_name=eq.${cfg.item}&item_type=eq.hunter_trophy`);
+        if (existing.length > 0) {
+            await dbFetch(`user_inventory?id=eq.${existing[0].id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ quantity: existing[0].quantity + count })
+            });
+        } else {
+            await dbFetch(`user_inventory`, {
+                method: 'POST',
+                body: JSON.stringify({ user_id: h.user_id, item_type: 'hunter_trophy', item_name: cfg.item, quantity: count })
+            });
+        }
+
+        await dbFetch(`users?user_id=eq.${h.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ hunter_last_collect: now.toISOString() })
+        });
+
+        await sendTg(token, 'sendMessage', {
+            chat_id: h.user_id,
+            text: `🦅 🐾 <b>گزارش عملیات شکارچی شخصی شما:</b>\n\n` +
+                `شکارچی شما مقدار <b>${count}</b> عدد «${cfg.item}» شکار کرد و به قفس شما اضافه شد! 📦\n` +
+                `برای مشاهده قفس، کلمه <b>قفس</b> را ارسال کنید.`,
+            parse_mode: 'HTML'
+        }).catch(() => {});
+    }
+}
+
 // ------------------- TELEGRAM API WRAPPER -------------------
 async function sendTg(token, method, payload) {
     const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -284,7 +481,7 @@ async function sendTg(token, method, payload) {
 
 // ------------------- WORKER ENTRY POINT -------------------
 export default {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
         if (request.method !== 'POST') return new Response('PishvaBot Active!', { status: 200 });
         
         const token = env.BOT_TOKEN;
@@ -292,7 +489,7 @@ export default {
             const update = await request.json();
             
             if (update.message) {
-                await handleMessage(token, update.message);
+                await handleMessage(token, update.message, ctx);
             } else if (update.callback_query) {
                 await handleCallback(token, update.callback_query);
             }
@@ -300,11 +497,20 @@ export default {
             console.error("Worker Error:", err);
         }
         return new Response('OK', { status: 200 });
+    },
+
+    // اجرای دوره‌ای (Cron Trigger) برای پردازش شکار خودکار شکارچی‌ها
+    // نکته: باید در wrangler.toml این مقدار تنظیم شود، مثلا هر ۱۵ دقیقه:
+    // [triggers]
+    // crons = ["*/15 * * * *"]
+    async scheduled(event, env, ctx) {
+        const token = env.BOT_TOKEN;
+        ctx.waitUntil(processHunters(token));
     }
 };
 
 // ------------------- MESSAGE HANDLER -------------------
-async function handleMessage(token, msg) {
+async function handleMessage(token, msg, ctx) {
     if (!msg.from || msg.from.is_bot) return;
 
     const chatId = msg.chat.id;
@@ -325,9 +531,34 @@ async function handleMessage(token, msg) {
                             `⚠️ <b>این گروه شرایط فعال‌سازی بات رایش بزرگ را ندارد.</b>\n\n` +
                             `📊 حداقل تعداد اعضای لازم: <b>${MIN_GROUP_MEMBERS}</b> نفر\n` +
                             `👥 تعداد اعضای فعلی گروه: <b>${memberCount}</b> نفر\n\n` +
-                            `🚀 لطفاً ابتدا اعضای بیشتری به گروه دعوت کنید، سپس بات به‌طور خودکار فعال خواهد شد.`,
+                            `🚀 لطفاً ابتدا اعضای بیشتری به گروه دعوت کنید، سپس بات به‌طور خودکار فعال خواهد شد.\n\n` +
+                            `👇 در همین حین می‌توانید به گروه رسمی رایش بزرگ بپیوندید:`,
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '🏛 ورود به گروه رایش بزرگ', url: GROUP_LINK }]]
+                        },
                         parse_mode: 'HTML'
                     });
+                }
+                // اگر گروه شرایط لازم را داشت، نیازی به پیام خوش‌آمد اضافه نیست
+                return;
+            }
+
+            // خوش‌آمدگویی به اعضای عادی جدید (غیر از خود بات)
+            const memberCount = await getChatMemberCount(token, chatId);
+            if (memberCount >= MIN_GROUP_MEMBERS) {
+                for (const newMember of msg.new_chat_members) {
+                    if (newMember.is_bot) continue;
+                    const mention = `<a href="tg://user?id=${newMember.id}">${newMember.first_name || 'سرباز جدید'}</a>`;
+                    await sendTg(token, 'sendMessage', {
+                        chat_id: chatId,
+                        text: `👑 ⚔️ <b>به رایش بزرگ خوش آمدید!</b> ⚔️ 👑\n\n` +
+                            `${mention} عزیز، به جمع سربازان رایش بزرگ پیوستید! 🫡\n\n` +
+                            `🔹 برای شروع خدمت سربازی، کلمه <b>درود</b> را ارسال کنید.\n` +
+                            `🔹 برای راهنمایی کامل، کلمه <b>راهنما</b> را ارسال کنید.\n` +
+                            `🔹 برای ورود به سایت رسمی، کلمه <b>سایت</b> را ارسال کنید.\n\n` +
+                            `⚡️ <i>به افتخار پیوستن یک سرباز جدید!</i> ⚡️`,
+                        parse_mode: 'HTML'
+                    }).catch(() => {});
                 }
             }
         }
@@ -335,11 +566,16 @@ async function handleMessage(token, msg) {
         return;
     }
 
-    // ------------------- محدودیت فعالیت بات در گروه‌های کوچک -------------------
+    // ------------------- محدودیت فعالیت بات در گروه‌های کوچک + ثبت آمار فعالیت گروه -------------------
     if (isGroup) {
         const memberCount = await getChatMemberCount(token, chatId);
         if (memberCount < MIN_GROUP_MEMBERS) {
             return; // بات در گروه‌های کمتر از حداقل عضو، هیچ فعالیتی انجام نمی‌دهد
+        }
+        try {
+            await trackGroupActivity(msg.chat);
+        } catch (e) {
+            console.error('trackGroupActivity error:', e);
         }
     }
 
@@ -350,6 +586,61 @@ async function handleMessage(token, msg) {
 
     // ------------------- بخش پیوی (پیام شخصی) -------------------
     if (!isGroup) {
+        // ثبت اینکه کاربر پیوی بات را شروع کرده (برای اعلان همگانی پیوی‌ها)
+        if (!user.started_pv) {
+            await dbFetch(`users?user_id=eq.${user.user_id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ started_pv: true })
+            }).catch(() => {});
+        }
+
+        // ------------------- اعلان همگانی (فقط در پیوی) -------------------
+        if (text.startsWith('ارسال اعلان به همه پیوی ها')) {
+            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length < 3 || !lines[1].startsWith('رمز')) {
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: '🚫 <b>فرمت اشتباه!</b>\nمثال صحیح:\n<code>ارسال اعلان به همه پیوی ها\nرمز 11111111\nمتن پیام</code>',
+                    parse_mode: 'HTML'
+                });
+            }
+            const code = lines[1].replace('رمز', '').trim();
+            if (code !== BROADCAST_PV_PASSWORD) {
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>رمز عبور اشتباه است!</b>', parse_mode: 'HTML' });
+            }
+            const broadcastText = lines.slice(2).join('\n');
+            await sendTg(token, 'sendMessage', { chat_id: chatId, text: '🚀 <b>ارسال اعلان همگانی به پیوی‌ها آغاز شد...</b>', parse_mode: 'HTML' });
+            if (ctx && ctx.waitUntil) {
+                ctx.waitUntil(broadcastToAllPV(token, broadcastText));
+            } else {
+                await broadcastToAllPV(token, broadcastText);
+            }
+            return;
+        }
+
+        if (text.startsWith('ارسال اعلان به همه گروه ها')) {
+            const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+            if (lines.length < 3 || !lines[1].startsWith('رمز')) {
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: '🚫 <b>فرمت اشتباه!</b>\nمثال صحیح:\n<code>ارسال اعلان به همه گروه ها\nرمز 22222222\nمتن پیام</code>',
+                    parse_mode: 'HTML'
+                });
+            }
+            const code = lines[1].replace('رمز', '').trim();
+            if (code !== BROADCAST_GROUP_PASSWORD) {
+                return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>رمز عبور اشتباه است!</b>', parse_mode: 'HTML' });
+            }
+            const broadcastText = lines.slice(2).join('\n');
+            await sendTg(token, 'sendMessage', { chat_id: chatId, text: '🚀 <b>ارسال اعلان همگانی به گروه‌ها آغاز شد...</b>', parse_mode: 'HTML' });
+            if (ctx && ctx.waitUntil) {
+                ctx.waitUntil(broadcastToAllGroups(token, broadcastText));
+            } else {
+                await broadcastToAllGroups(token, broadcastText);
+            }
+            return;
+        }
+
         // تغییر نام کاربری سایت در پیوی (مثال: "نام کاربری aliaa")
         if (text.startsWith('نام کاربری ')) {
             const newUsername = text.replace('نام کاربری ', '').trim();
@@ -369,6 +660,18 @@ async function handleMessage(token, msg) {
                 return sendTg(token, 'sendMessage', {
                     chat_id: chatId,
                     text: '❌ <b>نام کاربری باید فقط شامل حروف و اعداد انگلیسی باشد!</b>\nلطفاً مجدداً ارسال کنید (مثال: <code>نام کاربری aliaa</code>):',
+                    reply_to_message_id: replyMsgId,
+                    reply_markup: getPvReplyKeyboard(),
+                    parse_mode: 'HTML'
+                });
+            }
+
+            // بررسی یکتا بودن نام کاربری (بدون حساسیت به بزرگی/کوچکی حروف)
+            const dupCheck = await dbFetch(`users?site_username=ilike.${newUsername}&user_id=neq.${user.user_id}`);
+            if (dupCheck.length > 0) {
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: '❌ <b>این نام کاربری قبلاً توسط شخص دیگری ثبت شده است!</b>\nلطفاً نام کاربری دیگری انتخاب کنید. 🔄',
                     reply_to_message_id: replyMsgId,
                     reply_markup: getPvReplyKeyboard(),
                     parse_mode: 'HTML'
@@ -466,7 +769,8 @@ async function handleMessage(token, msg) {
                 `<code>رمز 1828281</code>\n\n` +
                 `⚠️ <b>نکات مهم:</b>\n` +
                 `• نام کاربری باید حداقل <b>۵ کاراکتر</b> باشد.\n` +
-                `• نام کاربری و رمز عبور باید <b>فقط انگلیسی</b> (حروف/اعداد لاتین) باشند.`;
+                `• نام کاربری و رمز عبور باید <b>فقط انگلیسی</b> (حروف/اعداد لاتین) باشند.\n` +
+                `• نام کاربری هر شخص باید <b>یکتا</b> باشد و تکراری پذیرفته نمی‌شود.`;
 
             return sendTg(token, 'sendMessage', {
                 chat_id: chatId,
@@ -492,6 +796,194 @@ async function handleMessage(token, msg) {
 
     if (text === 'راهنما') {
         return sendHelpMessage(token, chatId, replyMsgId, false);
+    }
+
+    // معرفی سایت رسمی
+    if (text === 'سایت') {
+        const siteText = `🌐 👑 <b>سایت رسمی رایش بزرگ</b> 👑 🌐\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `از طریق سایت رسمی رایش بزرگ می‌توانید به امکانات ویژه زیر دسترسی داشته باشید:\n\n` +
+            `🏆 <b>لیدربورد ثروتمندترین‌ها و قوی‌ترین‌ها</b> + جایزه هفتگی برای برترین‌ها\n` +
+            `📝 <b>امکان ارسال پست</b> (میم و غیره) و لایک و کامنت گذاشتن سایر رزمندگان\n` +
+            `🎡 <b>اسپین روزانه</b> با جوایز ویژه\n` +
+            `🎁 <b>جایزه روزانه</b>\n` +
+            `📖 <b>سیستم راهنمایی کامل</b> و امکانات بیشتر\n\n` +
+            `🔗 <b>لینک ورود:</b> https://Pishwabot.vercel.app\n\n` +
+            `💡 <i>برای دریافت نام کاربری و رمز عبور ورود، در پیوی بات دکمه «رمز و نام کاربری سایت» را بزنید.</i>`;
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: siteText,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // آمار فعال‌ترین گروه‌ها
+    if (text === 'آمار گروه ها' || text === 'امار گروه ها') {
+        const [topWeek, topMonth, topTotal] = await Promise.all([
+            dbFetch(`groups?order=messages_week.desc&limit=5`),
+            dbFetch(`groups?order=messages_month.desc&limit=5`),
+            dbFetch(`groups?order=messages_total.desc&limit=5`)
+        ]);
+
+        const buildSection = (list) => list.length ? list.map((g, i) => formatGroupLine(g, i)).join('\n') : '➖ داده‌ای موجود نیست';
+
+        const statsText = `📊 🏆 <b>فعال‌ترین گروه‌های رایش بزرگ</b> 🏆 📊\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `📅 <b>فعال‌ترین گروه‌ها در این هفته:</b>\n${buildSection(topWeek)}\n\n` +
+            `🗓 <b>فعال‌ترین گروه‌ها در این ماه:</b>\n${buildSection(topMonth)}\n\n` +
+            `🏆 <b>فعال‌ترین گروه‌ها از ابتدا:</b>\n${buildSection(topTotal)}`;
+
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+    }
+
+    // خرید و ارتقای شکارچی شخصی
+    if (text === 'شکارچی') {
+        if (user.level < HUNTER_MIN_RANK_LEVEL) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `🚫 <b>شما هنوز شایستگی استخدام شکارچی را ندارید!</b>\n\n` +
+                    `🎖 حداقل درجه لازم: <b>${getTitle(HUNTER_MIN_RANK_LEVEL)} (سطح ${HUNTER_MIN_RANK_LEVEL})</b>\n` +
+                    `🔰 درجه فعلی شما: <b>${getTitle(user.level)} (سطح ${user.level})</b>`,
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        const currentHLvl = user.hunter_level || 0;
+        if (currentHLvl >= 6) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '🦅 <b>شکارچی شما در حداکثر سطح ممکن (سطح ۶) قرار دارد!</b> 👑',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        const nextHLvl = currentHLvl + 1;
+        const cost = HUNTER_LEVELS[nextHLvl];
+        const cfg = HUNTER_CATCH_CONFIG[nextHLvl];
+        const actionLabel = currentHLvl === 0 ? 'استخدام شکارچی' : `ارتقا به سطح ${nextHLvl}`;
+
+        const keyboard = {
+            inline_keyboard: [[
+                { text: `✅ ${actionLabel} (${cost} مارک) 🎯`, callback_data: withOwner(`buy_hunter:${nextHLvl}:${cost}`, user.user_id) },
+                { text: '✖️ انصراف', callback_data: withOwner('cancel', user.user_id) }
+            ]]
+        };
+
+        const statusText = currentHLvl === 0
+            ? `🏹 <b>شما در حال حاضر شکارچی ندارید.</b>`
+            : `🏹 <b>سطح فعلی شکارچی شما:</b> ${currentHLvl}`;
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `🦅 🏹 <b>استخدام و ارتقای شکارچی شخصی</b> 🏹 🦅\n\n` +
+                `${statusText}\n` +
+                `💰 <b>هزینه ${actionLabel}:</b> ${cost} مارک ${MARK_ANIM}\n` +
+                `🎯 <b>توان شکار در سطح ${nextHLvl}:</b> ${cfg.min} تا ${cfg.max} «${cfg.item}» در هر ساعت (خودکار)\n\n` +
+                `آیا مایل به ${actionLabel} هستید فرمانده؟ ⚡️`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // دزدی از بقیه با منشن (@) و شرط‌بندی
+    if (text.startsWith('دزدی از @')) {
+        const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+        if (lines.length < 2 || !lines[1].startsWith('شرط')) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '🚫 <b>فرمت اشتباه!</b>\nمثال صحیح:\n<code>دزدی از @username</code>\n<code>شرط 500</code>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        const usernameRaw = lines[0].replace('دزدی از', '').trim();
+        const targetUsername = usernameRaw.replace('@', '').trim();
+        const betAmount = parseInt(lines[1].replace('شرط', '').trim());
+
+        if (!targetUsername || isNaN(betAmount) || betAmount <= 0) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '🚫 <b>فرمت اشتباه!</b>\nمثال صحیح:\n<code>دزدی از @username</code>\n<code>شرط 500</code>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        const targetUser = await getUserByUsername(targetUsername);
+        if (!targetUser) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>سرباز هدف در مقر پیدا نشد!</b> 🔎', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        if (targetUser.user_id === user.user_id) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>نمی‌توانی به خودت اعلام جنگ کنی!</b> 🤡', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        if (user.last_mention_attack) {
+            const diffMin = (new Date() - new Date(user.last_mention_attack)) / (1000 * 60);
+            if (diffMin < MENTION_ATTACK_COOLDOWN_MIN) {
+                const rem = Math.ceil(MENTION_ATTACK_COOLDOWN_MIN - diffMin);
+                return sendTg(token, 'sendMessage', {
+                    chat_id: chatId,
+                    text: `⌛ <b>هنوز آماده اعلام جنگ جدید نیستی!</b>\nباید <b>${rem} دقیقه</b> دیگر صبر کنی. 🕵️‍♂️`,
+                    reply_to_message_id: replyMsgId,
+                    parse_mode: 'HTML'
+                });
+            }
+        }
+
+        if (user.marks < betAmount) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: `💸 <b>موجودی جیب شما کافی نیست!</b>`, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        if (targetUser.marks < betAmount) {
+            return sendTg(token, 'sendMessage', { chat_id: chatId, text: `💸 <b>موجودی جیب سرباز هدف برای این شرط کافی نیست!</b>`, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        }
+
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + DUEL_EXPIRY_MIN * 60 * 1000);
+
+        const created = await dbFetch(`duel_challenges`, {
+            method: 'POST',
+            body: JSON.stringify({
+                challenger_id: user.user_id,
+                target_id: targetUser.user_id,
+                bet_amount: betAmount,
+                group_chat_id: chatId,
+                status: 'pending',
+                expires_at: expiresAt.toISOString()
+            })
+        });
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ last_mention_attack: now.toISOString() })
+        });
+
+        const challengeId = created[0].id;
+        const keyboard = {
+            inline_keyboard: [[
+                { text: '⚔️ قبول چالش', callback_data: withOwner(`duel_accept:${challengeId}`, targetUser.user_id) },
+                { text: '🏳️ رد چالش', callback_data: withOwner(`duel_decline:${challengeId}`, targetUser.user_id) }
+            ]]
+        };
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `⚔️ 🚨 <b>اعلام جنگ رسمی!</b> 🚨 ⚔️\n\n` +
+                `🎯 <b>${user.first_name}</b> به <b>${targetUser.first_name}</b> اعلام جنگ کرد!\n` +
+                `💰 <b>مبلغ شرط:</b> ${betAmount} مارک ${MARK_ANIM}\n\n` +
+                `⏳ <b>${targetUser.first_name}</b> فقط <b>${DUEL_EXPIRY_MIN} دقیقه</b> فرصت دارد تا چالش را قبول یا رد کند!`,
+            reply_to_message_id: replyMsgId,
+            reply_markup: keyboard,
+            parse_mode: 'HTML'
+        });
     }
 
     // ثبت لقب جدید
@@ -622,6 +1114,7 @@ async function handleMessage(token, msg) {
         const rank = await getUserRank(totalCollected);
 
         const nickText = targetUser.nickname ? `🏷 <b>لقب:</b> ${targetUser.nickname}\n` : '';
+        const hunterText = `🦅 <b>سطح شکارچی شخصی:</b> <b>سطح ${targetUser.hunter_level || 0}</b> 🏹\n`;
 
         const statsText = `📜 ✨ <b>شناسنامه و آمار نظامی:</b> ✨ 📜\n` +
             `✨ ────────────────── ✨\n\n` +
@@ -636,6 +1129,7 @@ async function handleMessage(token, msg) {
             `🗡 <b>قدرت تهاجمی:</b> <b>${power}</b> HP 💣\n` +
             `🛡 <b>قدرت دفاعی (زره):</b> <b>${health}</b> HP 🛡\n` +
             `🦅 <b>سطح تفنگ شکاری:</b> <b>${targetUser.hunting_rifle_level || 0}</b> 🎯\n` +
+            hunterText +
             `🫡 <b>تعداد ادای احترام:</b> <b>${targetUser.total_doroods || 0}</b> بار\n` +
             `⚠️ <b>سابقه جریمه:</b> <b>${targetUser.total_punishments || 0}</b> بار 🚨\n` +
             `⚔️ <b>تعداد نبردها:</b> <b>${targetUser.total_attacks || 0}</b> جنگ 💥\n` +
@@ -1015,7 +1509,7 @@ async function handleMessage(token, msg) {
             hunted = rand <= 30 ? 'آفت' : 'حشرات موذی';
         }
 
-        const existing = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${hunted}`);
+        const existing = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${hunted}&item_type=eq.trophy`);
         if (existing.length > 0) {
             await dbFetch(`user_inventory?id=eq.${existing[0].id}`, {
                 method: 'PATCH',
@@ -1044,19 +1538,27 @@ async function handleMessage(token, msg) {
         });
     }
 
-    // 12. قفس شکار
+    // 12. قفس شکار (صیدهای شخصی + صیدهای شکارچی)
     if (text === 'قفس') {
-        const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_type=eq.trophy`);
+        const invAll = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_type=in.(trophy,hunter_trophy)`);
+        const ownCatches = invAll.filter(i => i.item_type === 'trophy');
+        const hunterCatches = invAll.filter(i => i.item_type === 'hunter_trophy');
+
         let totalValue = 0;
-        let listText = "🪵 🦅 <b>محتویات قفس شکار شما:</b> 🦅 🪵\n✨ ────────────────── ✨\n\n";
+        const buildList = (list) => {
+            let str = '';
+            list.forEach(i => {
+                const val = (TROPHIES[i.item_name] || 0) * i.quantity;
+                totalValue += val;
+                str += `🔹 <b>${i.item_name}</b>: ${i.quantity} عدد (ارزش هرکدام: ${TROPHIES[i.item_name]} | کل: ${val} ${MARK_ANIM})\n`;
+            });
+            return str || '➖ خالی است\n';
+        };
 
-        inv.forEach(i => {
-            const val = (TROPHIES[i.item_name] || 0) * i.quantity;
-            totalValue += val;
-            listText += `🔹 <b>${i.item_name}</b>: ${i.quantity} عدد (ارزش هرکدام: ${TROPHIES[i.item_name]} | کل: ${val} ${MARK_ANIM})\n`;
-        });
-
-        listText += `\n💵 <b>ارزش مجموع صیدها:</b> <b>${totalValue}</b> مارک ${MARK_ANIM}`;
+        const listText = "🪵 🦅 <b>محتویات قفس شکار شما:</b> 🦅 🪵\n✨ ────────────────── ✨\n\n" +
+            `🏹 <b>صیدهای شخصی شما:</b>\n${buildList(ownCatches)}\n` +
+            `🐾 <b>صیدهای شکارچی شما:</b>\n${buildList(hunterCatches)}\n` +
+            `💵 <b>ارزش مجموع صیدها:</b> <b>${totalValue}</b> مارک ${MARK_ANIM}`;
 
         const keyboard = {
             inline_keyboard: [[{ text: '💎 چگونگی فروش صیدها 🚀', callback_data: withOwner('sell_trophies_prompt', user.user_id) }]]
@@ -1065,7 +1567,7 @@ async function handleMessage(token, msg) {
         return sendTg(token, 'sendMessage', { chat_id: chatId, text: listText, reply_to_message_id: replyMsgId, reply_markup: keyboard, parse_mode: 'HTML' });
     }
 
-    // 13. دستور فروش دستوری
+    // 13. دستور فروش دستوری (صیدهای شخصی و شکارچی هر دو قابل فروش هستند)
     if (text.startsWith('فروش ')) {
         const parts = text.split(' ');
         if (parts.length >= 3) {
@@ -1073,17 +1575,25 @@ async function handleMessage(token, msg) {
             const trophyName = parts.slice(2).join(' ').trim();
 
             if (!isNaN(count) && count > 0 && TROPHIES[trophyName]) {
-                const inv = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${trophyName}`);
-                if (inv.length > 0 && inv[0].quantity >= count) {
-                    const earned = count * TROPHIES[trophyName];
-                    const newQty = inv[0].quantity - count;
+                const invRows = await dbFetch(`user_inventory?user_id=eq.${user.user_id}&item_name=eq.${trophyName}&item_type=in.(trophy,hunter_trophy)`);
+                const totalAvailable = invRows.reduce((s, r) => s + r.quantity, 0);
 
-                    if (newQty > 0) {
-                        await dbFetch(`user_inventory?id=eq.${inv[0].id}`, { method: 'PATCH', body: JSON.stringify({ quantity: newQty }) });
-                    } else {
-                        await dbFetch(`user_inventory?id=eq.${inv[0].id}`, { method: 'DELETE' });
+                if (totalAvailable >= count) {
+                    let remaining = count;
+                    for (const row of invRows) {
+                        if (remaining <= 0) break;
+                        const take = Math.min(row.quantity, remaining);
+                        const newQty = row.quantity - take;
+
+                        if (newQty > 0) {
+                            await dbFetch(`user_inventory?id=eq.${row.id}`, { method: 'PATCH', body: JSON.stringify({ quantity: newQty }) });
+                        } else {
+                            await dbFetch(`user_inventory?id=eq.${row.id}`, { method: 'DELETE' });
+                        }
+                        remaining -= take;
                     }
 
+                    const earned = count * TROPHIES[trophyName];
                     await addMarksToUser(user, earned);
 
                     return sendTg(token, 'sendMessage', {
@@ -1110,6 +1620,7 @@ function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
         `🫡 <b>درود</b> ➔ دریافت پاداش روزانه (دارای زمان انتظار)\n` +
         `📊 <b>آمار / آمارش</b> ➔ مشاهده شناسنامه رزمی، لقب و مالی شما\n` +
         `🏷 <b>لقب [اسم]</b> ➔ ثبت لقب جدید برای خودتان (مثال: <code>لقب علی</code>)\n` +
+        `🌐 <b>سایت</b> ➔ نمایش ویژگی‌ها و لینک سایت رسمی رایش بزرگ\n` +
         `💀 <b>بازار سیاه</b> ➔ خرید تسلیحات سنگین و زره‌های نظامی\n` +
         `🏛 <b>بانک</b> ➔ مدیریت سرمایه و سپرده‌گذاری در رایشس بانک\n` +
         `💳 <b>واریز به بانک [مقدار]</b> ➔ انتقال پول از جیب به رایشس بانک\n` +
@@ -1117,14 +1628,20 @@ function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
         `🏦 <b>دزدی از بانک</b> ➔ سرقت مسلحانه از خزانه (پرخطر!)\n` +
         `🗡 <b>دزدی از سرباز</b> ➔ درگیری خیابانی و غارت سایر سربازان\n` +
         `⚔️ <b>حمله به @username</b> ➔ حمله مستقیم به سرباز هم‌لول خود\n` +
+        `⚔️ <b>دزدی از @username</b> + <b>شرط [مقدار]</b> ➔ اعلام جنگ رسمی و شرط‌بندی (۱۵ دقیقه فرصت پاسخ)\n` +
         `💸 <b>انتقال [مقدار]</b> ➔ انتقال مستقیم مارک ${MARK_ANIM} به سایر بازیکنان\n` +
         `🦅 <b>تفنگ شکاری</b> ➔ ارتقای سلاح شکاری برای صید موجودات بهتر\n` +
-        `🎯 <b>شکار / قفس</b> ➔ شکار موجودات (دارای زمان انتظار) و فروش صیدها\n\n` +
+        `🎯 <b>شکار / قفس</b> ➔ شکار موجودات (دارای زمان انتظار) و فروش صیدها\n` +
+        `🏹 <b>شکارچی</b> ➔ استخدام و ارتقای شکارچی شخصی برای شکار خودکار ساعتی (نیازمند سطح ۳ به بالا)\n` +
+        `📊 <b>آمار گروه ها</b> ➔ نمایش فعال‌ترین گروه‌های رایش بزرگ (هفته/ماه/کل)\n\n` +
         `🚨 <b>هشدار:</b> کلمات احوالپرسی غیرنظامی جریمه سنگین دارند! 🧨`;
     
-    const payload = { chat_id: chatId, text: helpText, parse_mode: 'HTML' };
+    const payload = { chat_id: chatId, text: helpText, parse_mode: 'HTML', reply_markup: getCommunityLinksKeyboard() };
     if (replyMsgId) payload.reply_to_message_id = replyMsgId;
-    if (isPv) payload.reply_markup = getPvReplyKeyboard();
+    if (isPv) {
+        // در پیوی، دکمه‌های لینک گروه/کانال به همراه کیبورد دائمی پیوی نمایش داده می‌شود
+        payload.reply_markup = getCommunityLinksKeyboard();
+    }
 
     return sendTg(token, 'sendMessage', payload);
 }
@@ -1277,6 +1794,108 @@ async function handleCallback(token, cb) {
         });
 
         return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: `🎯 🚀 تفنگ شکاری شما با موفقیت به <b>سطح ${targetLvl}</b> ارتقا پیدا کرد.`, parse_mode: 'HTML' });
+    }
+
+    // خرید یا ارتقای شکارچی شخصی
+    if (data.startsWith('buy_hunter:')) {
+        const [, lvlStr, costStr] = data.split(':');
+        const targetLvl = parseInt(lvlStr);
+        const cost = parseInt(costStr);
+
+        if (user.level < HUNTER_MIN_RANK_LEVEL) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '🚫 درجه شما برای این کار کافی نیست!', show_alert: true });
+        }
+        if (user.marks < cost) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ موجودی کافی نیست!', show_alert: true });
+        }
+
+        const updates = { marks: user.marks - cost, hunter_level: targetLvl };
+        if (!user.hunter_level || user.hunter_level === 0) {
+            updates.hunter_last_collect = new Date().toISOString();
+        }
+        await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify(updates) });
+
+        const cfg = HUNTER_CATCH_CONFIG[targetLvl];
+
+        await sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `🎉 🦅 <b>شکارچی شما آماده عملیات شد!</b> 🚀\n\n` +
+                `🏹 سطح جدید: <b>${targetLvl}</b>\n` +
+                `🎯 توان شکار: ${cfg.min} تا ${cfg.max} «${cfg.item}» در ساعت\n` +
+                `⏱ شکارچی از یک ساعت دیگر اولین شکار خود را انجام می‌دهد!`,
+            parse_mode: 'HTML'
+        });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: user.user_id,
+            text: `🦅 <b>شکارچی شما شروع به کار کرد!</b>\n\nسطح: <b>${targetLvl}</b> | توان: ${cfg.min}-${cfg.max} «${cfg.item}» در ساعت ⏱`,
+            parse_mode: 'HTML'
+        }).catch(() => {});
+    }
+
+    // قبول یا رد چالش دزدی با منشن (@)
+    if (data.startsWith('duel_accept:') || data.startsWith('duel_decline:')) {
+        const challengeId = data.split(':')[1];
+        const rows = await dbFetch(`duel_challenges?id=eq.${challengeId}`);
+
+        if (rows.length === 0 || rows[0].status !== 'pending') {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ این چالش دیگر معتبر نیست!', show_alert: true });
+        }
+
+        const challenge = rows[0];
+
+        if (new Date() > new Date(challenge.expires_at)) {
+            await dbFetch(`duel_challenges?id=eq.${challengeId}`, { method: 'PATCH', body: JSON.stringify({ status: 'expired' }) });
+            return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '⌛ <b>زمان پاسخ به این چالش به پایان رسید!</b>', parse_mode: 'HTML' });
+        }
+
+        if (data.startsWith('duel_decline:')) {
+            await dbFetch(`duel_challenges?id=eq.${challengeId}`, { method: 'PATCH', body: JSON.stringify({ status: 'declined' }) });
+            return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '🏳️ <b>چالش رد شد.</b>', parse_mode: 'HTML' });
+        }
+
+        // قبول چالش
+        const challengerRows = await dbFetch(`users?user_id=eq.${challenge.challenger_id}`);
+        const targetRows = await dbFetch(`users?user_id=eq.${challenge.target_id}`);
+        if (!challengerRows.length || !targetRows.length) {
+            return sendTg(token, 'answerCallbackQuery', { callback_query_id: cb.id, text: '❌ خطا در بارگذاری اطلاعات طرفین!', show_alert: true });
+        }
+
+        const cUser = challengerRows[0], tUser = targetRows[0];
+        const bet = challenge.bet_amount;
+
+        if (cUser.marks < bet || tUser.marks < bet) {
+            await dbFetch(`duel_challenges?id=eq.${challengeId}`, { method: 'PATCH', body: JSON.stringify({ status: 'expired' }) });
+            return sendTg(token, 'editMessageText', { chat_id: chatId, message_id: cb.message.message_id, text: '❌ <b>موجودی یکی از طرفین کافی نیست، چالش لغو شد.</b>', parse_mode: 'HTML' });
+        }
+
+        const cInv = await dbFetch(`user_inventory?user_id=eq.${cUser.user_id}`);
+        const tInv = await dbFetch(`user_inventory?user_id=eq.${tUser.user_id}`);
+        let cPower = 100, tPower = 100;
+        cInv.forEach(i => { if (WEAPONS[i.item_name]) cPower += WEAPONS[i.item_name].damage * i.quantity; });
+        tInv.forEach(i => { if (WEAPONS[i.item_name]) tPower += WEAPONS[i.item_name].damage * i.quantity; });
+
+        const challengerWins = cPower >= tPower;
+        const winner = challengerWins ? cUser : tUser;
+        const loser = challengerWins ? tUser : cUser;
+
+        await dbFetch(`users?user_id=eq.${winner.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: winner.marks + bet }) });
+        await dbFetch(`users?user_id=eq.${loser.user_id}`, { method: 'PATCH', body: JSON.stringify({ marks: Math.max(0, loser.marks - bet) }) });
+        await dbFetch(`duel_challenges?id=eq.${challengeId}`, { method: 'PATCH', body: JSON.stringify({ status: 'accepted' }) });
+
+        sendTg(token, 'sendMessage', { chat_id: winner.user_id, text: `🏆 <b>شما در نبرد رسمی با ${loser.first_name} پیروز شدید و ${bet} مارک ${MARK_ANIM} بردید!</b>`, parse_mode: 'HTML' }).catch(() => {});
+        sendTg(token, 'sendMessage', { chat_id: loser.user_id, text: `💀 <b>شما در نبرد رسمی با ${winner.first_name} شکست خوردید و ${bet} مارک ${MARK_ANIM} باختید!</b>`, parse_mode: 'HTML' }).catch(() => {});
+
+        return sendTg(token, 'editMessageText', {
+            chat_id: chatId,
+            message_id: cb.message.message_id,
+            text: `⚔️ 🏆 <b>نتیجه نبرد رسمی:</b>\n\n` +
+                `👑 <b>برنده:</b> ${winner.first_name}\n` +
+                `💀 <b>بازنده:</b> ${loser.first_name}\n` +
+                `💰 <b>مبلغ شرط:</b> ${bet} مارک ${MARK_ANIM}`,
+            parse_mode: 'HTML'
+        });
     }
 
     if (data === 'confirm_bank_heist') {
