@@ -8,8 +8,6 @@
  * 3) هنگام ثبت‌نام، نام کاربری و رمز عبور رندوم به‌صورت پیش‌فرض ثبت می‌شود.
  * 4) امکان برداشت مارک از رایشس بانک به جیب شخصی اضافه شد.
  * 5) دکمه‌های شیشه‌ای فقط توسط همان کاربری که ربات به او پاسخ داده قابل استفاده هستند.
- *
- * تغییرات این نسخه:
  * 6) دکمه ورود به گروه رایش بزرگ روی پیام اخطار «کمتر از ۱۰ عضو».
  * 7) پیام خوش‌آمدگویی و منشن شدن اعضای جدید گروه.
  * 8) دستور «سایت» برای معرفی و لینک سایت.
@@ -19,6 +17,14 @@
  * 12) دکمه‌های «گروه رایش بزرگ» و «کانال اطلاع‌رسانی» در راهنما.
  * 13) ارسال اعلان همگانی به همه پیوی‌ها / همه گروه‌ها با رمز عبور، به صورت دسته‌ای (۳۰ تایی هر ۵ ثانیه).
  * 14) ثبت آمار تعداد پیام هر گروه (هفتگی/ماهانه/کل) و نمایش فعال‌ترین گروه‌ها.
+ *
+ * تغییرات این نسخه:
+ * 15) دکمه «قوانین» در کیبورد پیوی + متن قوانین کپی‌رایت و ممنوعیت سلف بات.
+ * 16) نمایش فاصله تا مقام بعدی در دستور آمار + دکمه‌های شیشه‌ای قفل/باز کردن پروفایل.
+ * 17) دستور «شرطبندی» جهت راهنمایی ورود به سایت برای بازی‌های کازینو و دوئل.
+ * 18) سیستم پروفایل شخصی شامل لقب، بیوگرافی و عکس (لینک عکس تلگرام، بدون ذخیره فایل در Supabase).
+ * 19) سیستم رتبه‌بندی چندگانه (درود، مجموع مارک، رایشس بانک، پیروزی حمله، موجودی فعلی).
+ * 20) یکسان‌سازی حروف «آ» و «ا» در تمام دستورات بازی (مثلاً آمار = امار).
  */
 
 const SUPABASE_URL = "https://ziodmekyeqqhggwjblrl.supabase.co";
@@ -153,6 +159,13 @@ async function getUserRank(totalMarksCollected) {
     return rank;
 }
 
+// محاسبه رتبه کاربر بر اساس هر ستون دلخواه (برای سیستم رتبه‌بندی چندگانه)
+async function getGenericRank(field, value) {
+    const higherUsers = await dbFetch(`users?${field}=gt.${value}&select=user_id`);
+    const rank = (higherUsers && higherUsers.length ? higherUsers.length : 0) + 1;
+    return rank;
+}
+
 // تابع برای افزایش مارک و ثبت در مجموع مارک‌های جمع‌شده + مدیریت لول
 async function addMarksToUser(user, amount) {
     if (amount <= 0) return user;
@@ -270,6 +283,16 @@ const MENTION_ATTACK_COOLDOWN_MIN = 30;
 // زمان معتبر بودن چالش دزدی با منشن به دقیقه
 const DUEL_EXPIRY_MIN = 15;
 
+// مجموع مارک جمع‌آوری‌شده (total_marks_collected) لازم برای رسیدن به سطح بعدی
+// این اعداد صرفاً برای نمایش «فاصله تا مقام بعدی» در آمار استفاده می‌شوند
+const LEVEL_UP_THRESHOLDS = {
+    1: 5000,
+    2: 15000,
+    3: 40000,
+    4: 100000,
+    5: 250000
+};
+
 // ------------------- HELPER FUNCTIONS -------------------
 function getTitle(level) {
     if (level === 6) return "قائم مقام پیشوا";
@@ -328,7 +351,8 @@ function getPvReplyKeyboard() {
     return {
         keyboard: [
             [{ text: '🌐 ورود به سایت رایش بزرگ' }],
-            [{ text: '🔑 رمز و نام کاربری سایت' }, { text: '📖 راهنما' }]
+            [{ text: '🔑 رمز و نام کاربری سایت' }, { text: '📖 راهنما' }],
+            [{ text: '📜 قوانین' }]
         ],
         resize_keyboard: true,
         is_persistent: true
@@ -580,9 +604,45 @@ async function handleMessage(token, msg, ctx) {
     }
 
     const user = await getOrCreateUser(msg.from);
-    const rawText = (msg.text || '').trim();
-    const text = convertFaToEnNumbers(rawText);
+    // متن پیام یا کپشن عکس در نظر گرفته می‌شود (برای دستور «عکس» روی عکس ارسالی)
+    const rawText = (msg.text || msg.caption || '').trim();
+    // یکسان‌سازی حروف «آ» و «ا» در سراسر بازی (مثلاً آمار = امار)
+    const text = convertFaToEnNumbers(rawText).replace(/آ/g, 'ا');
     const replyMsgId = msg.message_id;
+
+    // ------------------- تغییر عکس پروفایل (لینک عکس از خود تلگرام گرفته و فقط لینک آن ذخیره می‌شود) -------------------
+    let photoSourceMsg = null;
+    if (msg.photo && text === 'عکس') {
+        photoSourceMsg = msg;
+    } else if (text === 'عکس' && msg.reply_to_message && msg.reply_to_message.photo) {
+        photoSourceMsg = msg.reply_to_message;
+    }
+
+    if (photoSourceMsg) {
+        const largestPhoto = photoSourceMsg.photo[photoSourceMsg.photo.length - 1];
+        const fileRes = await sendTg(token, 'getFile', { file_id: largestPhoto.file_id }).catch(() => null);
+
+        if (fileRes && fileRes.ok && fileRes.result && fileRes.result.file_path) {
+            const photoUrl = `https://api.telegram.org/file/bot${token}/${fileRes.result.file_path}`;
+            await dbFetch(`users?user_id=eq.${user.user_id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ photo_url: photoUrl })
+            });
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '✅ 📸 <b>عکس پروفایل شما با موفقیت ثبت شد!</b>\nبرای دیدن پروفایل خود، کلمه <b>پروفایلم</b> را ارسال کنید.',
+                reply_to_message_id: replyMsgId,
+                reply_markup: !isGroup ? getPvReplyKeyboard() : undefined,
+                parse_mode: 'HTML'
+            });
+        }
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: '❌ <b>خطا در دریافت عکس! لطفاً دوباره تلاش کنید.</b>',
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'HTML'
+        });
+    }
 
     // ------------------- بخش پیوی (پیام شخصی) -------------------
     if (!isGroup) {
@@ -592,6 +652,21 @@ async function handleMessage(token, msg, ctx) {
                 method: 'PATCH',
                 body: JSON.stringify({ started_pv: true })
             }).catch(() => {});
+        }
+
+        // ------------------- قوانین بات (فقط پیوی) -------------------
+        if (text === '📜 قوانین' || text === 'قوانین') {
+            const rulesText = `📜 ⚖️ <b>قوانین بات رایش بزرگ</b> ⚖️ 📜\n` +
+                `✨ ────────────────── ✨\n\n` +
+                `🚫 <b>بات دارای قانون کپی‌رایت است</b> و هرگونه کپی، ویرایش یا فروش آن پیگرد قانونی دارد.\n\n` +
+                `🚫 <b>استفاده از سلف بات ممنوع است</b> و در صورت مشاهده، اکانت شما بدون هیچ اخطاری از طرف بات مسدود (بن) خواهد شد.`;
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: rulesText,
+                reply_to_message_id: replyMsgId,
+                reply_markup: getPvReplyKeyboard(),
+                parse_mode: 'HTML'
+            });
         }
 
         // ------------------- اعلان همگانی (فقط در پیوی) -------------------
@@ -819,6 +894,15 @@ async function handleMessage(token, msg, ctx) {
         });
     }
 
+    // راهنمای شرط‌بندی و بازی‌های کازینو (فقط داخل سایت)
+    if (text === 'شرطبندی' || text === 'شرط بندی') {
+        const bettingText = `🎰 🃏 <b>شرط‌بندی و بازی‌های کازینو</b> 🃏 🎰\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `برای شرکت در بازی‌های کازینو، دوئل‌های رسمی، شرط‌بندی و سایر سرگرمی‌های ویژه رایش بزرگ باید وارد سایت رسمی شوید:\n\n` +
+            `🔗 <b>Pishwabot.vercel.app</b>`;
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: bettingText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+    }
+
     // آمار فعال‌ترین گروه‌ها
     if (text === 'آمار گروه ها' || text === 'امار گروه ها') {
         const [topWeek, topMonth, topTotal] = await Promise.all([
@@ -1021,6 +1105,134 @@ async function handleMessage(token, msg, ctx) {
         });
     }
 
+    // تغییر بیوگرافی پروفایل
+    if (text.startsWith('بیوگرافی')) {
+        const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+        let newBio = '';
+        if (lines.length >= 2) {
+            newBio = lines.slice(1).join('\n');
+        } else {
+            newBio = text.replace('بیوگرافی', '').trim();
+        }
+
+        if (!newBio) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '❌ <b>لطفاً متن بیوگرافی را وارد کنید!</b>\nمثال:\n<code>بیوگرافی\nتوانا بود هر که دارا بود</code>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ bio: newBio })
+        });
+
+        return sendTg(token, 'sendMessage', {
+            chat_id: chatId,
+            text: `✅ <b>بیوگرافی شما با موفقیت ثبت شد:</b>\n${newBio}`,
+            reply_to_message_id: replyMsgId,
+            parse_mode: 'HTML'
+        });
+    }
+
+    // ------------------- پروفایل (مشاهده خود یا دیگران) -------------------
+    if (text === 'پروفایلم' || text === 'پروفایل' || text === 'پروفایلش') {
+        let targetUser = user;
+        let isSelf = true;
+
+        if (msg.reply_to_message) {
+            targetUser = await getOrCreateUser(msg.reply_to_message.from);
+            isSelf = targetUser.user_id === user.user_id;
+        } else if (text === 'پروفایلش') {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '❌ <b>برای مشاهده پروفایل شخص دیگر، روی پیام او ریپلای بزنید و بنویسید: پروفایلش</b>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        const nickText = targetUser.nickname ? targetUser.nickname : '➖ ثبت نشده';
+        const bioText = targetUser.bio ? targetUser.bio : '➖ ثبت نشده';
+        const totalCollected = targetUser.total_marks_collected || targetUser.marks || 0;
+
+        const editGuide = isSelf
+            ? `\n\n✏️ <b>ویرایش پروفایل:</b>\n` +
+              `🔹 تغییر لقب: <code>لقب (لقب دلخواه)</code>\n` +
+              `🔹 تغییر بیوگرافی:\n<code>بیوگرافی\n(متن دلخواه)</code>\n` +
+              `🔹 تغییر عکس: عکس را با کپشن «عکس» بفرستید یا روی عکس ریپلای زده و بنویسید «عکس»`
+            : '';
+
+        const profileText = `🪪 ✨ <b>پروفایل ${isSelf ? 'شما' : targetUser.first_name}</b> ✨ 🪪\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `🏷 <b>لقب:</b> ${nickText}\n` +
+            `📝 <b>بیوگرافی:</b> ${bioText}\n\n` +
+            `💰 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
+            `🏛 <b>موجودی رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
+            `🔥 <b>مجموع کل مارک‌های جمع‌آوری شده:</b> <b>${totalCollected}</b> مارک ${MARK_ANIM}\n` +
+            `🫡 <b>تعداد ادای احترام (درود):</b> <b>${targetUser.total_doroods || 0}</b> بار` +
+            editGuide;
+
+        if (targetUser.photo_url) {
+            return sendTg(token, 'sendPhoto', {
+                chat_id: chatId,
+                photo: targetUser.photo_url,
+                caption: profileText,
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: profileText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+    }
+
+    // ------------------- رتبه‌بندی چندگانه -------------------
+    if (text === 'رتبه' || text === 'رتبش') {
+        let targetUser = user;
+        let isSelf = true;
+
+        if (msg.reply_to_message) {
+            targetUser = await getOrCreateUser(msg.reply_to_message.from);
+            isSelf = targetUser.user_id === user.user_id;
+        } else if (text === 'رتبش') {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: '❌ <b>برای مشاهده رتبه شخص دیگر، روی پیام او ریپلای بزنید و بنویسید: رتبش</b>',
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        if (!isSelf && targetUser.profile_locked) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `🔒 <b>این اکانت خصوصی است!</b>\n\nطبق درخواست خود کاربر، اطلاعاتش مخفی شده و امکان مشاهده رتبه او برای دیگران وجود ندارد.`,
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
+        }
+
+        const [doroodRank, marksRank, bankRank, winsRank, currentMarksRank] = await Promise.all([
+            getGenericRank('total_doroods', targetUser.total_doroods || 0),
+            getGenericRank('total_marks_collected', targetUser.total_marks_collected || targetUser.marks || 0),
+            getGenericRank('bank_balance', targetUser.bank_balance || 0),
+            getGenericRank('soldier_wins', targetUser.soldier_wins || 0),
+            getGenericRank('marks', targetUser.marks || 0)
+        ]);
+
+        const rankText = `🏆 ✨ <b>رتبه‌بندی ${isSelf ? 'شما' : targetUser.first_name} در رایش بزرگ</b> ✨ 🏆\n` +
+            `✨ ────────────────── ✨\n\n` +
+            `🫡 <b>رتبه در تعداد ادای احترام (درود):</b> نفر ${doroodRank}# 🥇\n` +
+            `🔥 <b>رتبه در مجموع مارک‌های جمع‌آوری شده:</b> نفر ${marksRank}# 🥇\n` +
+            `🏛 <b>رتبه در موجودی رایشس بانک:</b> نفر ${bankRank}# 🥇\n` +
+            `⚔️ <b>رتبه در پیروزی حمله به سرباز:</b> نفر ${winsRank}# 🥇\n` +
+            `💰 <b>رتبه در موجودی فعلی جیب (بدون احتساب مصرف‌شده‌ها):</b> نفر ${currentMarksRank}# 🥇`;
+
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: rankText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+    }
+
     // 1. مجازات برای کلمات ممنوعه
     if (['سلام', 'های', 'هلو'].includes(text.toLowerCase())) {
         let fine = 120;
@@ -1089,18 +1301,29 @@ async function handleMessage(token, msg, ctx) {
     }
 
     // 3. دریافت آمار
-    if (text === 'آمار' || text === 'امار' || text === 'آمارش' || text === 'امارش' || text.startsWith('آمار @') || text.startsWith('امار @')) {
+    if (text === 'امار' || text === 'امارش' || text.startsWith('امار @')) {
         let targetUser = user;
+        let isSelf = true;
 
         if (msg.reply_to_message) {
             targetUser = await getOrCreateUser(msg.reply_to_message.from);
+            isSelf = targetUser.user_id === user.user_id;
         } else if (text.includes('@')) {
             const parts = text.split('@');
             if (parts[1]) {
                 const found = await getUserByUsername(parts[1].trim());
-                if (found) targetUser = found;
+                if (found) { targetUser = found; isSelf = targetUser.user_id === user.user_id; }
                 else return sendTg(token, 'sendMessage', { chat_id: chatId, text: '❌ <b>کاربر مورد نظر در مقر پیدا نشد!</b> 🔎', reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
             }
+        }
+
+        if (!isSelf && targetUser.profile_locked) {
+            return sendTg(token, 'sendMessage', {
+                chat_id: chatId,
+                text: `🔒 <b>این اکانت خصوصی است!</b>\n\nطبق درخواست خود کاربر، اطلاعاتش مخفی شده و بجز خودش کس دیگری نمی‌تواند آمارش را ببیند.`,
+                reply_to_message_id: replyMsgId,
+                parse_mode: 'HTML'
+            });
         }
 
         const inv = await dbFetch(`user_inventory?user_id=eq.${targetUser.user_id}`);
@@ -1113,33 +1336,58 @@ async function handleMessage(token, msg, ctx) {
         const totalCollected = targetUser.total_marks_collected || targetUser.marks || 0;
         const rank = await getUserRank(totalCollected);
 
-        const nickText = targetUser.nickname ? `🏷 <b>لقب:</b> ${targetUser.nickname}\n` : '';
-        const hunterText = `🦅 <b>سطح شکارچی شخصی:</b> <b>سطح ${targetUser.hunter_level || 0}</b> 🏹\n`;
+        // فاصله تا مقام بعدی
+        const currentLevel = targetUser.level || 1;
+        let levelProgressText;
+        if (currentLevel < 6) {
+            const threshold = LEVEL_UP_THRESHOLDS[currentLevel];
+            const remaining = Math.max(0, threshold - totalCollected);
+            levelProgressText = `📈 <b>فاصله تا مقام «${getTitle(currentLevel + 1)}»:</b> <b>${remaining}</b> مارک ${MARK_ANIM} دیگر\n`;
+        } else {
+            levelProgressText = `👑 <b>در بالاترین مقام نظامی رایش بزرگ قرار دارد!</b>\n`;
+        }
 
-        const statsText = `📜 ✨ <b>شناسنامه و آمار نظامی:</b> ✨ 📜\n` +
+        const nickText = targetUser.nickname ? `🏷 <b>لقب:</b> ${targetUser.nickname}\n` : '';
+        const lockStatusText = `🔐 <b>وضعیت حریم خصوصی:</b> ${targetUser.profile_locked ? 'قفل 🔒' : 'باز 🔓'}\n`;
+
+        const statsText = `📜 ✨ <b>شناسنامه و آمار نظامی</b> ✨ 📜\n` +
             `✨ ────────────────── ✨\n\n` +
             `👤 <b>نام رزمنده:</b> ${targetUser.first_name}\n` +
             nickText +
-            `🎖 <b>مقام نظامی:</b> ${getTitle(targetUser.level)} (سطح ${targetUser.level})\n` +
-            `💎 <b>موجودی جیب:</b> <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
-            `🏛 <b>سپرده رایشس بانک:</b> <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
-            `👑 <b>سطح رایشس بانک:</b> <b>سطح ${targetUser.reichsbank_level || 0}</b>⚡️\n` +
-            `🔥 <b>مجموع کل مارک‌های دریافتی:</b> <b>${totalCollected}</b> مارک ${MARK_ANIM}\n` +
-            `🏆 <b>رتبه در ثروت‌آفرینی:</b> <b>نفر ${rank}#</b> در سراسر رایش 🥇\n\n` +
-            `🗡 <b>قدرت تهاجمی:</b> <b>${power}</b> HP 💣\n` +
-            `🛡 <b>قدرت دفاعی (زره):</b> <b>${health}</b> HP 🛡\n` +
-            `🦅 <b>سطح تفنگ شکاری:</b> <b>${targetUser.hunting_rifle_level || 0}</b> 🎯\n` +
-            hunterText +
-            `🫡 <b>تعداد ادای احترام:</b> <b>${targetUser.total_doroods || 0}</b> بار\n` +
-            `⚠️ <b>سابقه جریمه:</b> <b>${targetUser.total_punishments || 0}</b> بار 🚨\n` +
-            `⚔️ <b>تعداد نبردها:</b> <b>${targetUser.total_attacks || 0}</b> جنگ 💥\n` +
-            `🏆 <b>برد در دزدی از سرباز:</b> <b>${targetUser.soldier_wins || 0}</b> بار ✅\n` +
-            `💀 <b>باخت در دزدی از سرباز:</b> <b>${targetUser.soldier_losses || 0}</b> بار ❌\n\n` +
+            `\n🎖 <b>مقام و درجه:</b>\n` +
+            `🎖 مقام نظامی: <b>${getTitle(targetUser.level)} (سطح ${targetUser.level})</b>\n` +
+            levelProgressText +
+            `🏆 رتبه در ثروت‌آفرینی: <b>نفر ${rank}#</b> در سراسر رایش 🥇\n\n` +
+            `💰 <b>دارایی مالی:</b>\n` +
+            `💎 موجودی جیب: <b>${targetUser.marks}</b> مارک ${MARK_ANIM}\n` +
+            `🏛 سپرده رایشس بانک: <b>${targetUser.bank_balance}</b> مارک ${MARK_ANIM}\n` +
+            `👑 سطح رایشس بانک: <b>سطح ${targetUser.reichsbank_level || 0}</b>⚡️\n` +
+            `🔥 مجموع کل مارک‌های دریافتی: <b>${totalCollected}</b> مارک ${MARK_ANIM}\n\n` +
+            `⚔️ <b>آمار جنگی:</b>\n` +
+            `🗡 قدرت تهاجمی: <b>${power}</b> HP 💣\n` +
+            `🛡 قدرت دفاعی (زره): <b>${health}</b> HP 🛡\n` +
+            `⚔️ تعداد نبردها: <b>${targetUser.total_attacks || 0}</b> جنگ 💥\n` +
+            `🏆 برد در دزدی از سرباز: <b>${targetUser.soldier_wins || 0}</b> بار ✅\n` +
+            `💀 باخت در دزدی از سرباز: <b>${targetUser.soldier_losses || 0}</b> بار ❌\n` +
+            `⚠️ سابقه جریمه: <b>${targetUser.total_punishments || 0}</b> بار 🚨\n\n` +
+            `🦅 <b>شکار:</b>\n` +
+            `🎯 سطح تفنگ شکاری: <b>${targetUser.hunting_rifle_level || 0}</b>\n` +
+            `🏹 سطح شکارچی شخصی: <b>سطح ${targetUser.hunter_level || 0}</b>\n\n` +
+            `🫡 <b>سایر موارد:</b>\n` +
+            `🫡 تعداد ادای احترام: <b>${targetUser.total_doroods || 0}</b> بار\n` +
+            lockStatusText + `\n` +
             `🌐 <b>سامانه مرکزی رایش بزرگ:</b>\n` +
             ` جهت مشاهده تالار افتخارات، رده‌بندی جنگی، ثروتمندترین رزمندگان و برترین گردان‌ها به وب‌سایت رسمی مراجعه فرمایید:\n` +
             `🔗 Pishwabot.vercel.app`;
 
-        return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, parse_mode: 'HTML' });
+        const keyboard = isSelf ? {
+            inline_keyboard: [[
+                { text: '🔒 قفل کردن پروفایل', callback_data: withOwner('lock_profile', user.user_id) },
+                { text: '🔓 باز کردن پروفایل', callback_data: withOwner('unlock_profile', user.user_id) }
+            ]]
+        } : undefined;
+
+        return sendTg(token, 'sendMessage', { chat_id: chatId, text: statsText, reply_to_message_id: replyMsgId, reply_markup: keyboard, parse_mode: 'HTML' });
     }
 
     // 4. انتقال توکن
@@ -1618,9 +1866,14 @@ function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
         `✨ ────────────────── ✨\n\n` +
         `🚨 <b>مهم: بازی فقط درون گروه فعال می‌باشد و گروه باید حداقل ${MIN_GROUP_MEMBERS} عضو داشته باشد!</b>\n\n` +
         `🫡 <b>درود</b> ➔ دریافت پاداش روزانه (دارای زمان انتظار)\n` +
-        `📊 <b>آمار / آمارش</b> ➔ مشاهده شناسنامه رزمی، لقب و مالی شما\n` +
+        `📊 <b>آمار / امارش</b> ➔ مشاهده شناسنامه رزمی، مقام، دارایی و آمار جنگی + دکمه قفل/باز کردن پروفایل\n` +
+        `🏆 <b>رتبه / رتبش</b> ➔ مشاهده رتبه‌بندی خودتان یا دیگران در درود، مارک کل، بانک، پیروزی و موجودی فعلی\n` +
+        `🪪 <b>پروفایلم / پروفایل / پروفایلش</b> ➔ مشاهده و ویرایش پروفایل (لقب، بیوگرافی، عکس)\n` +
         `🏷 <b>لقب [اسم]</b> ➔ ثبت لقب جدید برای خودتان (مثال: <code>لقب علی</code>)\n` +
+        `📝 <b>بیوگرافی</b> ➔ ثبت بیوگرافی پروفایل (مثال: <code>بیوگرافی\nمتن دلخواه</code>)\n` +
+        `📸 <b>عکس</b> ➔ ثبت عکس پروفایل (به همراه ارسال عکس یا ریپلای روی عکس)\n` +
         `🌐 <b>سایت</b> ➔ نمایش ویژگی‌ها و لینک سایت رسمی رایش بزرگ\n` +
+        `🎰 <b>شرطبندی</b> ➔ راهنمای ورود به سایت برای کازینو، دوئل و بازی‌های شرطی\n` +
         `💀 <b>بازار سیاه</b> ➔ خرید تسلیحات سنگین و زره‌های نظامی\n` +
         `🏛 <b>بانک</b> ➔ مدیریت سرمایه و سپرده‌گذاری در رایشس بانک\n` +
         `💳 <b>واریز به بانک [مقدار]</b> ➔ انتقال پول از جیب به رایشس بانک\n` +
@@ -1634,6 +1887,7 @@ function sendHelpMessage(token, chatId, replyMsgId, isPv = false) {
         `🎯 <b>شکار / قفس</b> ➔ شکار موجودات (دارای زمان انتظار) و فروش صیدها\n` +
         `🏹 <b>شکارچی</b> ➔ استخدام و ارتقای شکارچی شخصی برای شکار خودکار ساعتی (نیازمند سطح ۳ به بالا)\n` +
         `📊 <b>آمار گروه ها</b> ➔ نمایش فعال‌ترین گروه‌های رایش بزرگ (هفته/ماه/کل)\n\n` +
+        (isPv ? `📜 <b>قوانین</b> ➔ مشاهده قوانین کپی‌رایت و ممنوعیت سلف بات\n\n` : '') +
         `🚨 <b>هشدار:</b> کلمات احوالپرسی غیرنظامی جریمه سنگین دارند! 🧨`;
     
     const payload = { chat_id: chatId, text: helpText, parse_mode: 'HTML', reply_markup: getCommunityLinksKeyboard() };
@@ -1670,6 +1924,26 @@ async function handleCallback(token, cb) {
 
     if (data === 'help_menu') {
         return sendHelpMessage(token, chatId, cb.message.message_id, cb.message.chat.type === 'private');
+    }
+
+    // قفل کردن پروفایل (جلوگیری از مشاهده آمار/رتبه توسط دیگران)
+    if (data === 'lock_profile') {
+        await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ profile_locked: true }) });
+        return sendTg(token, 'answerCallbackQuery', {
+            callback_query_id: cb.id,
+            text: '🔒 پروفایل شما قفل شد! از این پس فقط خودتان می‌توانید آمار و رتبه خود را مشاهده کنید.',
+            show_alert: true
+        });
+    }
+
+    // باز کردن پروفایل
+    if (data === 'unlock_profile') {
+        await dbFetch(`users?user_id=eq.${user.user_id}`, { method: 'PATCH', body: JSON.stringify({ profile_locked: false }) });
+        return sendTg(token, 'answerCallbackQuery', {
+            callback_query_id: cb.id,
+            text: '🔓 پروفایل شما باز شد! سایرین می‌توانند با ریپلای، آمار و رتبه شما را مشاهده کنند.',
+            show_alert: true
+        });
     }
 
     // راهنمای فروش صیدهای قفس
