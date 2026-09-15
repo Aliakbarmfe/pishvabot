@@ -611,6 +611,7 @@ async function handleMessage(token, msg, ctx) {
     const replyMsgId = msg.message_id;
 
     // ------------------- تغییر عکس پروفایل (لینک عکس از خود تلگرام گرفته و فقط لینک آن ذخیره می‌شود) -------------------
+        // ------------------- تغییر عکس پروفایل (ذخیره مستقیم file_id در photo_url) -------------------
     let photoSourceMsg = null;
     if (msg.photo && text === 'عکس') {
         photoSourceMsg = msg;
@@ -620,29 +621,23 @@ async function handleMessage(token, msg, ctx) {
 
     if (photoSourceMsg) {
         const largestPhoto = photoSourceMsg.photo[photoSourceMsg.photo.length - 1];
-        const fileRes = await sendTg(token, 'getFile', { file_id: largestPhoto.file_id }).catch(() => null);
+        const fileId = largestPhoto.file_id;
 
-        if (fileRes && fileRes.ok && fileRes.result && fileRes.result.file_path) {
-            const photoUrl = `https://api.telegram.org/file/bot${token}/${fileRes.result.file_path}`;
-            await dbFetch(`users?user_id=eq.${user.user_id}`, {
-                method: 'PATCH',
-                body: JSON.stringify({ photo_url: photoUrl })
-            });
-            return sendTg(token, 'sendMessage', {
-                chat_id: chatId,
-                text: '✅ 📸 <b>عکس پروفایل شما با موفقیت ثبت شد!</b>\nبرای دیدن پروفایل خود، کلمه <b>پروفایلم</b> را ارسال کنید.',
-                reply_to_message_id: replyMsgId,
-                reply_markup: !isGroup ? getPvReplyKeyboard() : undefined,
-                parse_mode: 'HTML'
-            });
-        }
+        await dbFetch(`users?user_id=eq.${user.user_id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ photo_url: fileId })
+        });
+
         return sendTg(token, 'sendMessage', {
             chat_id: chatId,
-            text: '❌ <b>خطا در دریافت عکس! لطفاً دوباره تلاش کنید.</b>',
+            text: '✅ 📸 <b>عکس پروفایل شما با موفقیت ثبت شد!</b>\nبرای دیدن پروفایل خود، کلمه <b>پروفایلم</b> را ارسال کنید.',
             reply_to_message_id: replyMsgId,
+            reply_markup: !isGroup ? getPvReplyKeyboard() : undefined,
             parse_mode: 'HTML'
         });
     }
+
+    
 
     // ------------------- بخش پیوی (پیام شخصی) -------------------
     if (!isGroup) {
