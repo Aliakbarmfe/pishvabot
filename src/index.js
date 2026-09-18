@@ -38,7 +38,7 @@ const MIN_GROUP_MEMBERS = 10;
 
 // لینک گروه رایش بزرگ و کانال اطلاع‌رسانی
 const GROUP_LINK = 'https://t.me/pishwa_group';
-const CHANNEL_LINK = 'https://t.me/pishwa_channel';
+const CHANNEL_LINK = 'https://t.me/pishwa_Tv';
 
 // رمزهای عبور اعلان همگانی
 const BROADCAST_PV_PASSWORD = '11111111';
