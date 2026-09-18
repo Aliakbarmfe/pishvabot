@@ -878,7 +878,7 @@ async function handleMessage(token, msg, ctx) {
             `🎡 <b>اسپین روزانه</b> با جوایز ویژه\n` +
             `🎁 <b>جایزه روزانه</b>\n` +
             `📖 <b>سیستم راهنمایی کامل</b> و امکانات بیشتر\n\n` +
-            `🔗 <b>لینک ورود:</b> https://Pishwabot.vercel.app\n\n` +
+            `🔗 <b>لینک ورود:</b> http://t.me/Pishwabot/site\n\n` +
             `💡 <i>برای دریافت نام کاربری و رمز عبور ورود، در پیوی بات دکمه «رمز و نام کاربری سایت» را بزنید.</i>`;
 
         return sendTg(token, 'sendMessage', {
