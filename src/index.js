@@ -821,7 +821,7 @@ async function handleMessage(token, msg, ctx) {
         if (text === '🌐 ورود به سایت رایش بزرگ') {
             return sendTg(token, 'sendMessage', {
                 chat_id: chatId,
-                text: `🌐 <b>لینک ورود به سایت رایش بزرگ:</b>\n\nhttps://Pishwabot.vercel.app`,
+                text: `🌐 <b>لینک ورود به سایت رایش بزرگ:</b>\n\http://t.me/Pishwabot/site `,
                 reply_markup: getPvReplyKeyboard(),
                 parse_mode: 'HTML'
             });
